@@ -21,8 +21,13 @@ class Question(BaseModel):
     
 # Question = Tuple[str, Loc] # image path and location
 
+
+# hyperparameters
 max_rounds = 20
 max_hp = 100.0
+
+place_guess_timeout = 60 # in seconds
+agree_next_timeout = 6 # in seconds
 
 # remark: the internal coordinate system normalizes to [0, 1]
 distance_scale = 100

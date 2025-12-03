@@ -57,11 +57,10 @@
 
     enterBtn.addEventListener('click', async () => {
       const room = (roomInput.value || 'default').trim();
-      // Initialize room state and set team selection
+      // Initialize room state; team is maintained client-side via URL
       await post(`/api/init?room=${encodeURIComponent(room)}`, {});
-      await post(`/api/select_team?room=${encodeURIComponent(room)}`, { team: selectedTeam });
-      // Navigate to game with room parameter
-      window.location.href = `/index.html?room=${encodeURIComponent(room)}`;
+      // Navigate to game with room and team parameters
+      window.location.href = `/index.html?room=${encodeURIComponent(room)}&team=${encodeURIComponent(selectedTeam)}`;
     });
   </script>
 </body>

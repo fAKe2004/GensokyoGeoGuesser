@@ -7,8 +7,11 @@ def distance(xy1: Coord, xy2: Coord) -> float:
     x2, y2 = xy2
     return ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
 
-def compute_damage(xy1: Coord, xy2: Coord, room_id: int) -> float:
-    dist = distance(xy1, xy2) * distance_scale
-    damage = dist * db.get_dmg_mult(room_id)
+def compute_scaled_distance(xy1: Coord, xy2: Coord) -> float:
+    return distance(xy1, xy2) * distance_scale
+
+def compute_scaled_damage(xy1: Coord, xy2: Coord, mult: int) -> float:
+    dist = compute_scaled_distance(xy1, xy2)
+    damage = dist * mult
     return damage
 

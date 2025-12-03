@@ -33,9 +33,12 @@ class RoomState(BaseModel):
     
     # round state
     team_coord: Dict[Team, Optional[Coord]] = {Team.BLUE: None, Team.RED: None}
-    selected_team: Team = Team.BLUE
     
     team_answered: Dict[Team, bool] = {Team.BLUE: False, Team.RED: False}
+    team_ready_next: Dict[Team, bool] = {Team.BLUE: False, Team.RED: False}
+    
+    # track if damage has been applied for the current round to avoid double-subtraction
+    last_damage_applied_round: Optional[int] = None
 
     @property
     def answer_revealed(self) -> bool:
@@ -53,6 +56,8 @@ class RoomState(BaseModel):
     def reset_round_status(self) -> None:
         self.team_coord = {Team.BLUE: None, Team.RED: None}
         self.team_answered = {Team.BLUE: False, Team.RED: False}
+        self.team_ready_next = {Team.BLUE: False, Team.RED: False}
+        self.last_damage_applied_round = None
 
 # rooms registry
 rooms: Dict[str, RoomState] = {}
@@ -142,11 +147,7 @@ def get_team_coord(team: Team, room_id: str) -> Optional[Coord]:
 def set_team_coord(team: Team, coord: Optional[Coord], room_id: str):
     get_room(room_id).team_coord[team] = coord
 
-def get_selected_team(room_id: str) -> Team:
-    return get_room(room_id).selected_team
-
-def set_selected_team(team: Team, room_id: str):
-    get_room(room_id).selected_team = team
+# Deprecated: selected team is session-specific; no per-room selected team state
 
 def set_team_answered(team: Team, answered: bool, room_id: str) -> None:
     get_room(room_id).team_answered[team] = answered
@@ -156,6 +157,13 @@ def reset_round_status(room_id: str) -> None:
 
 def get_answer_revealed(room_id: str) -> bool:
     return get_room(room_id).answer_revealed
+
+def set_team_ready_next(team: Team, ready: bool, room_id: str) -> None:
+    get_room(room_id).team_ready_next[team] = ready
+
+def both_ready_next(room_id: str) -> bool:
+    room = get_room(room_id)
+    return all(room.team_ready_next.values())
 
 def init_database():    
     # load loc_db
@@ -190,12 +198,7 @@ def init_database():
 def init_room(room_id: str):
     # Initialize a new room with its own samplers and selectors
     if room_id in rooms:
-        # Re-initialize samplers/selectors and round index for an existing room
-        rooms[room_id].init_sampler(seed=sum(ord(c) for c in room_id))
-        rooms[room_id].round_index = -1
-        rooms[room_id].que_history = []
-        rooms[room_id].team_hp = {Team.BLUE: max_hp, Team.RED: max_hp}
-        rooms[room_id].reset_round_status()
+        pass
     else:
         rooms[room_id] = RoomState()
         rooms[room_id].init_sampler(seed=sum(ord(c) for c in room_id))

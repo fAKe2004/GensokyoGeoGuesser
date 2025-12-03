@@ -86,7 +86,9 @@
         </div>
     <div id="right-panel">
         <h2 class="panel-title">Round <span id="round" class="badge">?</span></h2>
-        <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span></div>
+                <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span>
+                    <span id="team-label" style="margin-left:auto; font-weight:700;"></span>
+                </div>
         <div id="question-container">
             <img id="question-img" src="" alt="Question Image">
             <div id="question-comment" style="display:none;"></div>
@@ -97,7 +99,7 @@
         <div id="stats-grid" class="stats-grid">
             <!-- Header row: team labels -->
             <div class="col blue-label">BLUE</div>
-            <div class="col stat-header">label</div>
+            <div class="col stat-header">TEAM</div>
             <div class="col red-label">RED</div>
             <!-- HP row -->
             <div class="col stat-val hp" id="hp-blue">?</div>
@@ -107,10 +109,6 @@
             <div class="col stat-val small" id="guess-blue" style="display:none;">—</div>
             <div class="col stat-header dim" id="guess-label" style="display:none;">guess</div>
             <div class="col stat-val small" id="guess-red" style="display:none;">—</div>
-            <!-- Distance row -->
-            <div class="col stat-val small" id="dis-blue">?</div>
-            <div class="col stat-header dim">distance</div>
-            <div class="col stat-val small" id="dis-red">?</div>
             <!-- Damage row -->
             <div class="col stat-val small" id="dmg-blue">?</div>
             <div class="col stat-header dim">damage</div>
@@ -124,6 +122,9 @@
             <button id="prev-btn">prev</button>
             <button id="reveal-btn">reveal answer</button>
             <button id="next-btn">next</button>
+        </div>
+        <div class="controls inline">
+            <button id="submit-btn" class="team-btn" disabled>submit</button>
         </div>
                 <div class="controls inline">
                         <button id="refmap-btn" title="Show annotated reference map">reference map</button>
@@ -143,7 +144,8 @@
   <script>
     document.addEventListener('DOMContentLoaded', function() {
         const urlParams = new URLSearchParams(window.location.search);
-        const roomParam = urlParams.get('room');
+    const roomParam = urlParams.get('room');
+    const teamParam = (urlParams.get('team') || '').toLowerCase();
         if (!roomParam) {
             window.location.href = '/lobby';
             return;
@@ -164,8 +166,7 @@
         const hpRedEl = document.getElementById('hp-red');
     const dmgBlueEl = document.getElementById('dmg-blue');
     const dmgRedEl = document.getElementById('dmg-red');
-    const disBlueEl = document.getElementById('dis-blue');
-    const disRedEl = document.getElementById('dis-red');
+    // Distance is not displayed separately anymore
     const commentEl = document.getElementById('question-comment');
         const selectBlueBtn = document.getElementById('select-blue');
         const selectRedBtn = document.getElementById('select-red');
@@ -178,6 +179,8 @@
         const revealBtn = document.getElementById('reveal-btn');
     const refBtn = document.getElementById('refmap-btn');
     const refOverlay = document.getElementById('ref-overlay');
+    const teamLabelEl = document.getElementById('team-label');
+    const submitBtn = document.getElementById('submit-btn');
 
         function updateUI(data) {
             // Update Round & Mult badges (beautified)
@@ -215,41 +218,68 @@
                 commentEl.textContent = '';
             }
 
-            // Damage and distance rows (only after reveal)
-            if (data.damage) {
-                const dmgBlue = Number(data.damage.blue ?? NaN);
-                const dmgRed = Number(data.damage.red ?? NaN);
+            // Damage row (only after reveal): show "distance × x{mult}" (no final value)
+            if (data.distance) {
                 const mult = Number(data.dmg_mult ?? 1);
-                if (Number.isFinite(dmgBlue)) {
-                    // Show as negative values and in smaller orange style (CSS already applied)
-                    dmgBlueEl.textContent = `-${dmgBlue.toFixed(2)}`;
-                    disBlueEl.textContent = `-${(dmgBlue / mult).toFixed(2)}`;
-                } else {
-                    dmgBlueEl.textContent = '?';
-                    disBlueEl.textContent = '?';
-                }
-                if (Number.isFinite(dmgRed)) {
-                    dmgRedEl.textContent = `-${dmgRed.toFixed(2)}`;
-                    disRedEl.textContent = `-${(dmgRed / mult).toFixed(2)}`;
-                } else {
-                    dmgRedEl.textContent = '?';
-                    disRedEl.textContent = '?';
-                }
+                const fmt = (dist) => {
+                    if (!Number.isFinite(dist)) return '?';
+                    return `${dist.toFixed(2)} × x${mult.toFixed(1)}`;
+                };
+                const distBlue = Number(data.distance.blue ?? NaN);
+                const distRed = Number(data.distance.red ?? NaN);
+                dmgBlueEl.textContent = fmt(distBlue);
+                dmgRedEl.textContent = fmt(distRed);
             } else {
                 dmgBlueEl.textContent = '?';
                 dmgRedEl.textContent = '?';
-                disBlueEl.textContent = '?';
-                disRedEl.textContent = '?';
             }
 
             // Normalize selected team from server (e.g., "Blue"/"Red") to lowercase for UI logic
-            state.selectedTeam = String(data.selected_team || state.selectedTeam || 'blue').toLowerCase();
+            // If a team is provided via URL, lock to that team
+            state.selectedTeam = String(teamParam || data.selected_team || state.selectedTeam || 'blue').toLowerCase();
             const isBlue = state.selectedTeam === 'blue';
             selectBlueBtn.classList.toggle('active', isBlue);
             selectRedBtn.classList.toggle('active', !isBlue);
+            // Update Team label next to multiplier
+            teamLabelEl.textContent = `TEAM: ${isBlue ? 'BLUE' : 'RED'}`;
+            teamLabelEl.style.color = isBlue ? '#5557EE' : '#EE5755';
+            teamLabelEl.style.textAlign = 'right';
+            teamLabelEl.style.minWidth = '120px';
+            teamLabelEl.style.fontWeight = '800';
+            teamLabelEl.style.fontSize = '22px';
 
             prevBtn.disabled = !data.has_prev;
             nextBtn.disabled = !data.has_next;
+            // Hide admin controls unless in debug mode
+            const adminControls = [prevBtn, nextBtn, revealBtn, selectBlueBtn, selectRedBtn];
+            adminControls.forEach(el => {
+                if (!data.debug) { el.style.display = 'none'; } else { el.style.display = ''; }
+            });
+            // Simplified horizontal state row (append directly as 3 grid cells)
+            const statsGrid = document.getElementById('stats-grid');
+            let stateBlue = document.getElementById('state-blue');
+            let stateLabel = document.getElementById('state-label');
+            let stateRed = document.getElementById('state-red');
+            if (!stateBlue || !stateLabel || !stateRed) {
+                if (!stateBlue) { stateBlue = document.createElement('div'); stateBlue.className = 'col stat-val small'; stateBlue.id = 'state-blue'; statsGrid.appendChild(stateBlue); }
+                if (!stateLabel) { stateLabel = document.createElement('div'); stateLabel.className = 'col stat-header dim'; stateLabel.id = 'state-label'; stateLabel.textContent = 'STATE'; statsGrid.appendChild(stateLabel); }
+                if (!stateRed) { stateRed = document.createElement('div'); stateRed.className = 'col stat-val small'; stateRed.id = 'state-red'; statsGrid.appendChild(stateRed); }
+            }
+            // Single-state flow: pending/ready depending on phase
+            const phasePendingReady = (revealed, answered, readyNext) => {
+                // Before reveal: ❓ until submitted -> ✅
+                // After reveal: ❓ until next agreed -> ✅
+                if (!revealed) {
+                    return answered ? '✅' : '❓';
+                }
+                return readyNext ? '✅' : '❓';
+            };
+            const blueStateText = phasePendingReady(!!data.answer_revealed, !!data.team_answered?.blue, !!data.team_ready_next?.blue);
+            const redStateText = phasePendingReady(!!data.answer_revealed, !!data.team_answered?.red, !!data.team_ready_next?.red);
+            const sb = document.getElementById('state-blue'); const sl = document.getElementById('state-label'); const sr = document.getElementById('state-red');
+            if (sb) { sb.textContent = blueStateText; sb.style.color = (blueStateText === '✅') ? '#2d662d' : '#c05621'; }
+            if (sl) { sl.textContent = 'STATE'; }
+            if (sr) { sr.textContent = redStateText; sr.style.color = (redStateText === '✅') ? '#2d662d' : '#c05621'; }
             
             // Clear existing pins
             Object.values(state.pins).forEach(pin => pin && pin.remove());
@@ -280,6 +310,26 @@
             } else {
                 ansInfo.style.display = 'none';
                 clearLines();
+            }
+            // Update submit/next button state
+            const hasGuess = !!(state.selectedTeam === 'blue' ? data.coords?.blue : data.coords?.red);
+            const answered = state.selectedTeam === 'blue' ? !!data.team_answered?.blue : !!data.team_answered?.red;
+            const readyNext = state.selectedTeam === 'blue' ? !!data.team_ready_next?.blue : !!data.team_ready_next?.red;
+            if (!revealed) {
+                submitBtn.textContent = 'submit';
+                submitBtn.disabled = !hasGuess || answered;
+            } else {
+                submitBtn.textContent = 'next';
+                submitBtn.disabled = readyNext;
+            }
+
+            // Auto-refresh when server signals for my team
+            const myTeam = (state.selectedTeam === 'blue' ? 'blue' : 'red');
+            const needsRefresh = !!data.refresh?.[myTeam];
+            if (needsRefresh) {
+                // Acknowledge and then hard reload to sync state
+                postAction('/api/ack_refresh', {}, { includeTeam: true })
+                    .then(() => location.reload());
             }
         }
 
@@ -327,7 +377,10 @@
         }
 
         function fetchState() {
-            fetch(`/api/state?room=${encodeURIComponent(roomId)}`)
+            // Always use the latest team from state or current URL
+            const currentTeam = (state.selectedTeam || (new URLSearchParams(window.location.search).get('team') || '')).toLowerCase();
+            const teamQ = currentTeam ? `&team=${encodeURIComponent(currentTeam)}` : '';
+            fetch(`/api/state?room=${encodeURIComponent(roomId)}${teamQ}`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
@@ -338,28 +391,38 @@
                 });
         }
 
-        function postAction(url, body) {
-            return fetch(`${url}?room=${encodeURIComponent(roomId)}`, {
+        function postAction(url, body, opts = {}) {
+            const teamQ = opts.includeTeam ? `&team=${encodeURIComponent(teamParam || state.selectedTeam)}` : '';
+            return fetch(`${url}?room=${encodeURIComponent(roomId)}${teamQ}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             }).then(response => response.json());
         }
 
+        // Client-side team selection via URL query; enabled in debug (buttons visible only when debug)
         selectBlueBtn.addEventListener('click', () => {
-            postAction('/api/select_team', { team: 'blue' }).then(updateUI);
+            state.selectedTeam = 'blue';
+            const url = new URL(window.location.href);
+            url.searchParams.set('team', 'blue');
+            history.replaceState(null, '', url.toString());
+            // Reload to ensure the new team param is applied everywhere
+            window.location.reload();
         });
-
         selectRedBtn.addEventListener('click', () => {
-            postAction('/api/select_team', { team: 'red' }).then(updateUI);
+            state.selectedTeam = 'red';
+            const url = new URL(window.location.href);
+            url.searchParams.set('team', 'red');
+            history.replaceState(null, '', url.toString());
+            window.location.reload();
         });
 
         prevBtn.addEventListener('click', () => {
-            postAction('/api/prev_round').then(updateUI);
+            postAction('/api/prev_round').then(updateUI).then(() => fetchState());
         });
 
         nextBtn.addEventListener('click', () => {
-            postAction('/api/next_round').then(updateUI);
+            postAction('/api/next_round').then(updateUI).then(() => fetchState());
         });
 
         revealBtn.addEventListener('click', () => {
@@ -367,6 +430,19 @@
                 .then(response => response.json())
                 .then(updateUI)
                 .then(() => fetchState()); // ensure a follow-up refresh
+        });
+
+        // Submit/Next button behavior
+        submitBtn.addEventListener('click', () => {
+            if (submitBtn.textContent === 'submit') {
+                postAction('/api/submit', {}, { includeTeam: true })
+                    .then(data => { submitBtn.disabled = true; updateUI(data); })
+                    .then(() => fetchState());
+            } else {
+                postAction('/api/agree_next', {}, { includeTeam: true })
+                    .then(data => { submitBtn.disabled = true; updateUI(data); })
+                    .then(() => fetchState());
+            }
         });
 
         // Reference map overlay open/close
@@ -398,16 +474,37 @@
             
             // Use normalized selected team when placing local pin
             const teamColor = state.selectedTeam === 'blue' ? 'blue' : 'red';
-            addPin([lat, lon], teamColor);
+            // If already submitted, do not allow placing guess (no local pin movement)
+            const answered = state.selectedTeam === 'blue' ? !!state.data?.team_answered?.blue : !!state.data?.team_answered?.red;
+            if (answered) return;
 
             // Server tracks selected team globally; send coords and refresh UI with returned state
-            postAction('/api/place_guess', { lat, lon, team: state.selectedTeam })
-                .then(updateUI)
+            postAction('/api/place_guess', { lat, lon, team: state.selectedTeam }, { includeTeam: true })
+                .then(data => { updateUI(data); /* after server confirms, local pin updates via data */ })
+                .then(() => fetchState())
                 .catch(err => console.error('place_guess failed', err));
         });
         
         // Initial load
         postAction('/api/init').then(updateUI).then(() => fetchState());
+
+        // Server-Sent Events: listen for room events and refresh UI (soft update)
+        try {
+            const evt = new EventSource(`/events/${encodeURIComponent(roomId)}`);
+            evt.onmessage = function(ev) {
+                const msg = String(ev.data || '').trim();
+                if (msg === 'next_round' || msg === 'reveal') {
+                    // Soft refresh: fetch latest state and update UI without full page reload
+                    fetchState();
+                }
+            };
+            evt.onerror = function() {
+                // If SSE fails, we can fallback to polling by periodically calling fetchState()
+                // Minimal fallback: no-op for now
+            };
+        } catch (e) {
+            console.warn('SSE not available', e);
+        }
     });
   </script>
 </body>
