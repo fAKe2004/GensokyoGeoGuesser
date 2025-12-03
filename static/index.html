@@ -142,6 +142,13 @@
 
   <script>
     document.addEventListener('DOMContentLoaded', function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomParam = urlParams.get('room');
+        if (!roomParam) {
+            window.location.href = '/lobby';
+            return;
+        }
+        const roomId = roomParam;
         const state = {
             selectedTeam: 'blue',
             pins: {
@@ -320,7 +327,7 @@
         }
 
         function fetchState() {
-            fetch('/api/state')
+            fetch(`/api/state?room=${encodeURIComponent(roomId)}`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
@@ -332,7 +339,7 @@
         }
 
         function postAction(url, body) {
-            return fetch(url, {
+            return fetch(`${url}?room=${encodeURIComponent(roomId)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
@@ -356,9 +363,10 @@
         });
 
         revealBtn.addEventListener('click', () => {
-            fetch('/api/reveal')
+            fetch(`/api/reveal?room=${encodeURIComponent(roomId)}`)
                 .then(response => response.json())
-                .then(updateUI);
+                .then(updateUI)
+                .then(() => fetchState()); // ensure a follow-up refresh
         });
 
         // Reference map overlay open/close
@@ -399,7 +407,7 @@
         });
         
         // Initial load
-        postAction('/api/init').then(updateUI);
+        postAction('/api/init').then(updateUI).then(() => fetchState());
     });
   </script>
 </body>

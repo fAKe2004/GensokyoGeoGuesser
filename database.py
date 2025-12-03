@@ -1,4 +1,4 @@
-from typing import Iterable, Dict, Optional, List
+from typing import Iterable, Dict, Optional, List, Callable
 import os
 
 from defs import *
@@ -10,50 +10,86 @@ que_sheet_path = "data/questions.csv" # format: global_id, image_filename, loc, 
 
 que_image_dir = "images/"
 
-# global variables for database operations
-
+# global, shared datasets (room-independent)
 # loc -> (lat, lon)
 loc_db: Dict[Loc, Coord] = {}
 
-# global index -> Question
+# global index -> Question (shared catalogue)
 que_db: Dict[int, Question] = {}
 
-# history of asked questions
-que_history: List[int] = []
-round_index: int = -1
+# Per-room runtime state (ephemeral)
+from pydantic import BaseModel
 
-# sampler
-category_sampler: Optional[Iterable[Category]]
-question_sampler: Iterable[int]
-dmg_mult_selector: Callable[[int], float]
+class RoomState(BaseModel):
+    # sampler
+    category_sampler: Optional[Iterable[Category]] = None
+    question_sampler: Iterable[int] = iter([])
+    dmg_mult_selector: Callable[[int], float] = lambda idx: 1.0
+    
+    # persistent history
+    que_history: List[int] = []
+    round_index: int = -1
+    team_hp: Dict[Team, float] = {Team.BLUE: max_hp, Team.RED: max_hp}
+    
+    # round state
+    team_coord: Dict[Team, Optional[Coord]] = {Team.BLUE: None, Team.RED: None}
+    selected_team: Team = Team.BLUE
+    
+    team_answered: Dict[Team, bool] = {Team.BLUE: False, Team.RED: False}
 
-# team specific
-team_hp: Dict[Team, float] = {Team.BLUE: max_hp, Team.RED: max_hp}
-team_coord: Dict[Team, Optional[Coord]] = {Team.BLUE: None, Team.RED: None}
+    @property
+    def answer_revealed(self) -> bool:
+        return all(self.team_answered.values())
+    
+    def force_answer_reveal(self) -> None:
+        for team in self.team_answered:
+            self.team_answered[team] = True
+    
+    def init_sampler(self, seed: int):
+        self.category_sampler = get_category_sampler(seed)
+        self.question_sampler = get_question_sampler(seed)
+        self.dmg_mult_selector = get_dmg_mult_selector(seed)
+    
+    def reset_round_status(self) -> None:
+        self.team_coord = {Team.BLUE: None, Team.RED: None}
+        self.team_answered = {Team.BLUE: False, Team.RED: False}
 
-def sample_question(category_sampler: Optional[Iterable[Category]], question_sampler: Iterable[int]) -> Question:
+# rooms registry
+rooms: Dict[str, RoomState] = {}
+
+def get_room(room_id: str) -> RoomState:
+    if room_id not in rooms:
+        rooms[room_id] = RoomState()
+    return rooms[room_id]
+
+def sample_question(room_id: str) -> Question:
     # two mode:
     # 1. if category_sampler is provided, question_sampler is just rng for choosing one from valid questions. 
     # 2. if category_sampler is None, question_sampler must provide non-repeating global indices (i.e., select a series of questions directly)
     
     # in either case, any iterable raises StopIteration will terminate the sampling process.
     try:
-        if category_sampler is not None:
-            cat = next(category_sampler)
-            valid_ques = [idx for idx, q in que_db.items() if q.category == cat and idx not in que_history]
+        room = get_room(room_id)
+        if room.category_sampler is not None:
+            cat = next(room.category_sampler)
+            valid_ques = [idx for idx, q in que_db.items() if q.category == cat and idx not in room.que_history]
             if not valid_ques:
                 raise RuntimeError(f"No more valid questions available for category {cat}.")
-            idx = next(question_sampler) % len(valid_ques)
+            if room.question_sampler is None:
+                raise RuntimeError("question_sampler is not configured for this room.")
+            idx = next(room.question_sampler) % len(valid_ques)
             idx = valid_ques[idx]
-            que_history.append(idx)
+            room.que_history.append(idx)
             return que_db[idx]
         else:
-            idx = next(question_sampler)
-            if idx in que_history:
+            if room.question_sampler is None:
+                raise RuntimeError("question_sampler is not configured for this room.")
+            idx = next(room.question_sampler)
+            if idx in room.que_history:
                 raise RuntimeError(f"Question index {idx} has already been used.")
             elif idx not in que_db:
                 raise RuntimeError(f"Question index {idx} is out of bounds.")
-            que_history.append(idx)
+            room.que_history.append(idx)
             return que_db[idx]
 
     except StopIteration:
@@ -62,47 +98,64 @@ def sample_question(category_sampler: Optional[Iterable[Category]], question_sam
 
 # get question at specific history index
 # if the index is out of current history range, sample more questions until reaching that index
-def get_question_at(target_index: int) -> Question:
+def get_question_at(target_index: int, room_id: str) -> Question:
     assert 0 <= target_index < max_rounds, f"Target index {target_index} out of bounds."
-    while len(que_history) <= target_index:
+    room = get_room(room_id)
+    while len(room.que_history) <= target_index:
         try:
-            sample_question(category_sampler, question_sampler)
+            sample_question(room_id)
         except StopIteration:
             raise RuntimeError("No more questions can be sampled despite the target index is smaller than max_rounds. Check the samplers.")
-        
-    global round_index
-    round_index = target_index
-    return que_db[que_history[target_index]]
+    room.round_index = target_index
+    return que_db[room.que_history[target_index]]
 
-def get_current_question() -> Question:
-    return get_question_at(round_index)
+def get_current_question(room_id: str) -> Question:
+    return get_question_at(get_current_round(room_id), room_id)
 
-def get_current_round() -> int:
-    return round_index
+def get_current_round(room_id: str) -> int:
+    return get_room(room_id).round_index
 
-def set_current_round(target_index: int):
-    get_question_at(target_index)
+def set_current_round(target_index: int, room_id: str):
+    get_question_at(target_index, room_id)
     
-def has_next_round() -> bool:
-    return round_index + 1 < max_rounds
+def has_next_round(room_id: str) -> bool:
+    return get_room(room_id).round_index + 1 < max_rounds
 
-def has_prev_round() -> bool:
-    return round_index - 1 >= 0
+def has_prev_round(room_id: str) -> bool:
+    return get_room(room_id).round_index - 1 >= 0
     
-def get_dmg_mult() -> float:
-    return dmg_mult_selector(round_index)
+def get_dmg_mult(room_id: str) -> float:
+    room = get_room(room_id)
+    if room.dmg_mult_selector is None:
+        raise RuntimeError("dmg_mult_selector is not configured for this room.")
+    return room.dmg_mult_selector(get_room(room_id).round_index)
 
-def get_team_hp(team: Team) -> float:
-    return team_hp[team]
+def get_team_hp(team: Team, room_id: str) -> float:
+    return get_room(room_id).team_hp[team]
 
-def set_team_hp(team: Team, hp: float):
-    team_hp[team] = hp
+def set_team_hp(team: Team, hp: float, room_id: str):
+    get_room(room_id).team_hp[team] = hp
     
-def get_team_coord(team: Team) -> Optional[Coord]:
-    return team_coord[team]
+def get_team_coord(team: Team, room_id: str) -> Optional[Coord]:
+    return get_room(room_id).team_coord[team]
 
-def set_team_coord(team: Team, coord: Coord):
-    team_coord[team] = coord
+def set_team_coord(team: Team, coord: Optional[Coord], room_id: str):
+    get_room(room_id).team_coord[team] = coord
+
+def get_selected_team(room_id: str) -> Team:
+    return get_room(room_id).selected_team
+
+def set_selected_team(team: Team, room_id: str):
+    get_room(room_id).selected_team = team
+
+def set_team_answered(team: Team, answered: bool, room_id: str) -> None:
+    get_room(room_id).team_answered[team] = answered
+
+def reset_round_status(room_id: str) -> None:
+    get_room(room_id).reset_round_status()
+
+def get_answer_revealed(room_id: str) -> bool:
+    return get_room(room_id).answer_revealed
 
 def init_database():    
     # load loc_db
@@ -132,19 +185,18 @@ def init_database():
             q = Question(image_path=image_path, location=loc, category=category, comment=comment)
             que_db[int(id_str)] = q
 
-    global round_index, que_history
-    round_index = -1
-    que_history = []
-    
-    global category_sampler, question_sampler, dmg_mult_selector
-    category_sampler = get_category_sampler()
-    question_sampler = get_question_sampler()
-    dmg_mult_selector = get_dmg_mult_selector()
-    
-    global team_hp
-    team_hp = {Team.BLUE: max_hp, Team.RED: max_hp}
-    
-    global team_coord
-    team_coord = {Team.BLUE: None, Team.RED: None}
-    
-    set_current_round(0)
+    # Do not create/reset any default room here; rooms are created via init_room
+
+def init_room(room_id: str):
+    # Initialize a new room with its own samplers and selectors
+    if room_id in rooms:
+        # Re-initialize samplers/selectors and round index for an existing room
+        rooms[room_id].init_sampler(seed=sum(ord(c) for c in room_id))
+        rooms[room_id].round_index = -1
+        rooms[room_id].que_history = []
+        rooms[room_id].team_hp = {Team.BLUE: max_hp, Team.RED: max_hp}
+        rooms[room_id].reset_round_status()
+    else:
+        rooms[room_id] = RoomState()
+        rooms[room_id].init_sampler(seed=sum(ord(c) for c in room_id))
+    set_current_round(0, room_id)

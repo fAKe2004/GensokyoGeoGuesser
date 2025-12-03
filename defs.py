@@ -28,17 +28,17 @@ max_hp = 100.0
 distance_scale = 100
 
 
-def get_category_sampler() -> Sampler[Category]:
+def get_category_sampler(seed: int) -> Sampler[Category]:
     categories = ["E"] * 10 + ["M"] * 5 + ["H"] * 2
     return iter(categories)
     
-def get_question_sampler() -> Sampler:
+def get_question_sampler(seed: int) -> Sampler:
     import random
     def sampler():
         while True:
             yield random.randint(0, 1000000)
     return sampler()
 
-def get_dmg_mult_selector() -> Callable[[int], float]:
+def get_dmg_mult_selector(seed: int) -> Callable[[int], float]:
     dmg_mults = [1.0] * 10 + [2.5] * 5 + [4.0] * 2
     return lambda idx: dmg_mults[idx % len(dmg_mults)]
