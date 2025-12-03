@@ -28,6 +28,8 @@
     #right-panel { flex:1; display:flex; flex-direction:column; gap:12px; max-width:420px; }
     .panel-title { margin:0; font-size:20px; font-weight:700; display:flex; align-items:center; gap:8px; }
     .badge { background:#222; color:#fff; padding:4px 10px; border-radius:999px; font-size:14px; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.25); }
+    .badge-round { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:28px; border-radius:50%; padding:0 8px; font-size:14px; font-weight:800; background:#222; color:#fff; box-shadow:0 1px 3px rgba(0,0,0,0.25); }
+    .badge-round.secondary { background:#6b7280; }
     /* Use a neutral color for multiplier to avoid BLUE/RED association */
     .badge-accent { background:#6b7280; /* neutral gray */ }
     .mult-box { font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; }
@@ -67,6 +69,17 @@
         border: 2px solid white;
         box-shadow: 0 0 5px rgba(0,0,0,0.5);
     }
+    /* Reference map button: subtle, shallow color to distinguish from submit */
+    #refmap-btn { background: #f3f4f6; border-color: #e5e7eb; color: #111; }
+    #refmap-btn:hover { background:#eceff3; }
+
+    /* Result modal styles */
+    .result-panel { text-align:center; padding:20px; max-width:480px; }
+    .winner-badge { display:inline-block; padding:14px 18px; border-radius:12px; font-weight:800; font-size:20px; letter-spacing:0.02em; }
+    .winner-blue { background: linear-gradient(90deg,#eef2ff,#eef6ff); color:#2333cc; box-shadow:0 8px 24px rgba(85,87,238,0.14); }
+    .winner-red { background: linear-gradient(90deg,#fff0f0,#fff4f4); color:#b02a2a; box-shadow:0 8px 24px rgba(238,87,85,0.14); }
+    .winner-draw { background:#f3f4f6; color:#111; box-shadow:0 6px 18px rgba(0,0,0,0.06); }
+    .result-sub { margin-top:10px; color:#555; font-size:15px; }
   </style>
 </head>
 <body>
@@ -85,7 +98,7 @@
             <div class="map-credit">We give acknowledgement to MC幻想郷 circle for kindly sharing their map.</div>
         </div>
     <div id="right-panel">
-        <h2 class="panel-title">Round <span id="round" class="badge">?</span></h2>
+    <h2 class="panel-title">Round <span id="round-current" class="badge-round">?</span> / <span id="round-max" class="badge-round secondary">?</span></h2>
                 <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span>
                     <span id="team-label" style="margin-left:auto; font-weight:700;"></span>
                 </div>
@@ -141,6 +154,18 @@
         </div>
     </div>
 
+    <!-- Game Result Modal -->
+    <div id="result-overlay" aria-hidden="true" style="position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:2000;">
+            <div class="panel result-panel" role="dialog" aria-label="Game Result" style="background:#fff; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,0.35);">
+                <h3 id="result-title" style="margin:0 0 6px; font-size:22px; text-align:center;">Game Over</h3>
+                <div id="result-winner" aria-hidden="true"></div>
+                <div id="result-text" class="result-sub" style="min-height:18px;"></div>
+                <div style="display:flex; justify-content:center; gap:10px; margin-top:14px;">
+                    <button id="to-lobby" class="team-btn" style="min-width:140px; background:#fff; border-color:#ddd;">Return to Lobby</button>
+                </div>
+            </div>
+    </div>
+
   <script>
     document.addEventListener('DOMContentLoaded', function() {
         const urlParams = new URLSearchParams(window.location.search);
@@ -160,7 +185,8 @@
             }
         };
 
-        const roundEl = document.getElementById('round');
+    const roundCurEl = document.getElementById('round-current');
+    const roundMaxEl = document.getElementById('round-max');
         const dmgMultEl = document.getElementById('dmg-mult');
         const hpBlueEl = document.getElementById('hp-blue');
         const hpRedEl = document.getElementById('hp-red');
@@ -179,12 +205,19 @@
         const revealBtn = document.getElementById('reveal-btn');
     const refBtn = document.getElementById('refmap-btn');
     const refOverlay = document.getElementById('ref-overlay');
+    const resultOverlay = document.getElementById('result-overlay');
+    const resultTitleEl = document.getElementById('result-title');
+    const resultTextEl = document.getElementById('result-text');
+    const toLobbyBtn = document.getElementById('to-lobby');
     const teamLabelEl = document.getElementById('team-label');
     const submitBtn = document.getElementById('submit-btn');
 
         function updateUI(data) {
             // Update Round & Mult badges (beautified)
-            roundEl.textContent = `${data.round}`;
+            // Round display: current / max (if available)
+            roundCurEl.textContent = `${data.round}`;
+            const totalRounds = (data.total_rounds ?? data.max_rounds ?? data.rounds?.max);
+            roundMaxEl.textContent = (Number.isFinite(Number(totalRounds)) ? String(totalRounds) : '?');
             dmgMultEl.textContent = `${data.dmg_mult}x`;
             hpBlueEl.textContent = data.hp.blue.toFixed(2);
             hpRedEl.textContent = data.hp.red.toFixed(2);
@@ -223,7 +256,7 @@
                 const mult = Number(data.dmg_mult ?? 1);
                 const fmt = (dist) => {
                     if (!Number.isFinite(dist)) return '?';
-                    return `${dist.toFixed(2)} × x${mult.toFixed(1)}`;
+                    return `${dist.toFixed(2)} x ${mult.toFixed(1)}`;
                 };
                 const distBlue = Number(data.distance.blue ?? NaN);
                 const distRed = Number(data.distance.red ?? NaN);
@@ -262,7 +295,7 @@
             let stateRed = document.getElementById('state-red');
             if (!stateBlue || !stateLabel || !stateRed) {
                 if (!stateBlue) { stateBlue = document.createElement('div'); stateBlue.className = 'col stat-val small'; stateBlue.id = 'state-blue'; statsGrid.appendChild(stateBlue); }
-                if (!stateLabel) { stateLabel = document.createElement('div'); stateLabel.className = 'col stat-header dim'; stateLabel.id = 'state-label'; stateLabel.textContent = 'STATE'; statsGrid.appendChild(stateLabel); }
+                if (!stateLabel) { stateLabel = document.createElement('div'); stateLabel.className = 'col stat-header dim'; stateLabel.id = 'state-label'; stateLabel.textContent = 'Ready'; statsGrid.appendChild(stateLabel); }
                 if (!stateRed) { stateRed = document.createElement('div'); stateRed.className = 'col stat-val small'; stateRed.id = 'state-red'; statsGrid.appendChild(stateRed); }
             }
             // Single-state flow: pending/ready depending on phase
@@ -321,6 +354,37 @@
             } else {
                 submitBtn.textContent = 'next';
                 submitBtn.disabled = readyNext;
+            }
+
+            // Check for game end condition; server sets winner fields in state
+            // Expected fields: data.winner ("blue"|"red"), optionally data.reason or final hp
+            if (data && (data.winner === 'blue' || data.winner === 'red' || data.winner === 'draw')) {
+                const winner = String(data.winner);
+                resultTitleEl.textContent = 'Game Over';
+                // Build winner badge
+                const winnerContainer = document.getElementById('result-winner');
+                let badgeHtml = '';
+                if (winner === 'blue') {
+                    badgeHtml = `<span class="winner-badge winner-blue">Winner is BLUE</span>`;
+                } else if (winner === 'red') {
+                    badgeHtml = `<span class="winner-badge winner-red">Winner is RED</span>`;
+                } else {
+                    badgeHtml = `<span class="winner-badge winner-draw">DRAW</span>`;
+                }
+                if (winnerContainer) winnerContainer.innerHTML = badgeHtml;
+
+                // Optional reason shown as smaller text; do NOT include HP in final screen
+                const reason = data.reason || '';
+                resultTextEl.textContent = reason;
+
+                // Show modal
+                resultOverlay.style.display = 'flex';
+                resultOverlay.setAttribute('aria-hidden', 'false');
+
+                // Keep HP visible in HUD; do not show HP values inside result popup
+
+                // Disable interactive controls
+                [prevBtn, nextBtn, revealBtn, submitBtn].forEach(btn => { if (btn) btn.disabled = true; });
             }
 
             // Auto-refresh when server signals for my team
@@ -504,6 +568,14 @@
             };
         } catch (e) {
             console.warn('SSE not available', e);
+        }
+
+        // Result modal actions
+        if (toLobbyBtn) {
+            toLobbyBtn.addEventListener('click', () => {
+                // Navigate back to lobby
+                window.location.href = '/lobby';
+            });
         }
     });
   </script>

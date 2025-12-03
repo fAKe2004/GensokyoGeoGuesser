@@ -6,11 +6,41 @@ from flask import Response
 import database as db
 import calc
 from defs import *
+import lobby as lb
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
 # Global debug flag (can be enabled via command-line arg or environment)
 DEBUG_MODE: bool = False
+
+def dprint(*args, **kwargs):
+    if DEBUG_MODE:
+        print(*args, **kwargs)
+    else:
+        pass
+    
+def end_game_condition(room_id: str, state: dict):
+    blue_hp = db.get_team_hp(Team.BLUE, room_id)
+    red_hp = db.get_team_hp(Team.RED, room_id)
+    
+    has_next_round = db.has_next_round(room_id) 
+    
+    hp_exhausted = blue_hp <= 0 or red_hp <= 0
+    round_exhausted = not has_next_round and not hp_exhausted
+    
+    # end-game condition
+    if hp_exhausted or round_exhausted:
+        if abs(blue_hp - red_hp) < 0.1 and (
+            (blue_hp <= 0 and red_hp <= 0) or round_exhausted
+        ):
+            winner = "draw"
+        else:
+            winner = "red" if blue_hp <= red_hp else "blue"
+        state["winner"] = winner
+        dprint(f"Game outcome determined: winner is {winner} / {hp_exhausted} / {round_exhausted}")
+        lb.mark_stale_room(room_id)
+    else:
+        pass        
 
 def apply_damage(room_id: str, state: dict):
     dmg_mult = state["dmg_mult"]
@@ -39,9 +69,15 @@ def apply_damage(room_id: str, state: dict):
             current_hp = db.get_team_hp(team, room_id)
             db.set_team_hp(team, current_hp - dmg, room_id)
         room.last_damage_applied_round = state["round"]
-    # sync hp values in state after potential update
+    
     state["hp"]["blue"] = db.get_team_hp(Team.BLUE, room_id)
     state["hp"]["red"] = db.get_team_hp(Team.RED, room_id)
+    
+    # judge end_game_condition
+    end_game_condition(room_id, state)
+
+    
+    
 
 # Simple SSE event queues per room
 event_queues: dict[str, list[queue.Queue]] = {}
@@ -57,28 +93,6 @@ def broadcast(room_id: str, msg: str):
             q.put(msg)
         except Exception:
             pass
-
-def reveal_damage(room_id: str, state: dict):
-    for team in [Team.BLUE, Team.RED]:
-        team_coord = db.get_team_coord(team, room_id)
-        # if coord missing (e.g., refresh), treat as default midpoint
-        if team_coord is None:
-            db.set_team_coord(team, (0.5, 0.5), room_id)
-        
-    damage = {}
-    for team in [Team.BLUE, Team.RED]:
-        team_coord = db.get_team_coord(team, room_id)
-        ans_coord = state.get("answer_coord")
-        mult = db.get_dmg_mult(room_id)
-        dmg = calc.compute_scaled_damage(team_coord, ans_coord, mult)
-        damage[team.value.lower()] = dmg
-        current_hp = db.get_team_hp(team, room_id)
-        db.set_team_hp(team, current_hp - dmg, room_id)
-    
-    state["damage"] = damage
-    state["hp"]["blue"] = db.get_team_hp(Team.BLUE, room_id)
-    state["hp"]["red"] = db.get_team_hp(Team.RED, room_id)
-
 
 @app.route("/")
 def index():
@@ -137,8 +151,9 @@ def get_state():
             }
 
     state = {
-        "round": db.get_current_round(room_id),
+        "round": db.get_current_round(room_id) + 1, # to 1-indexed.
         "dmg_mult": db.get_dmg_mult(room_id),
+        "total_rounds": max_rounds,
         "question_comment": question.comment,
         "team": team_value,  # session-specific; client controls selection
         "hp": {
@@ -175,6 +190,43 @@ def lobby():
     # Serve the simple lobby page for choosing a room and team
     return send_from_directory(app.static_folder, "lobby.html")
 
+@app.route("/lobby/events/<room_id>")
+def lobby_events(room_id: str):
+    q = lb.create_lobby_event_stream(room_id)
+    def stream():
+        while True:
+            msg = q.get()
+            yield f"data: {msg}\n\n"
+    return Response(stream(), mimetype="text/event-stream")
+
+@app.route("/api/lobby/quick_match", methods=["POST"])
+def lobby_quick_match():
+    """Unified quick match / room join endpoint.
+    Body may include optional { room: <room_id> }.
+    Responses:
+    - Error (room in game): 400, { error: "Room already in game. Please choose another room." }
+    - Immediate match: { matched: true, room: <id>, team: <blue|red>, channel: <sse_channel> }
+    - Waiting: { matched: false, team: <blue>, channel: <sse_channel> }
+    """
+    payload = request.get_json(silent=True) or {}
+    requested_room = payload.get("room")
+    room_id, sse_channel, team, err = lb.join_match(requested_room)
+    if err:
+        return jsonify({"error": err}), 400
+    if room_id:
+        return jsonify({"matched": True, "room": room_id, "team": team.value.lower(), "channel": sse_channel})
+    else:
+        return jsonify({"matched": False, "team": team.value.lower(), "channel": sse_channel})
+
+@app.route("/api/lobby/ping", methods=["POST"])
+def lobby_ping():
+    payload = request.get_json(silent=True) or {}
+    channel = payload.get("channel")
+    if not channel:
+        return jsonify({"error": "Missing channel"}), 400
+    lb.mark_channel_seen(channel)
+    return jsonify({"ok": True})
+
 @app.route("/api/next_round", methods=["POST"])
 def next_round():
     room_id = request.args.get("room")
@@ -182,8 +234,8 @@ def next_round():
         return jsonify({"error": "Missing room id"}), 400
     if db.has_next_round(room_id):
         db.set_current_round(db.get_current_round(room_id) + 1, room_id)
-    print("ACTION: Next Round")
-    print("> question ", db.get_current_question(room_id))
+    dprint("ACTION: Next Round")
+    dprint("> question ", db.get_current_question(room_id))
 
     db.reset_round_status(room_id)
 
@@ -196,13 +248,14 @@ def prev_round():
         return jsonify({"error": "Missing room id"}), 400
     if db.has_prev_round(room_id):
         db.set_current_round(db.get_current_round(room_id) - 1, room_id)
-    print("ACTION: Prev Round")
-    print("> question ", db.get_current_question(room_id))
+    dprint("ACTION: Prev Round")
+    dprint("> question ", db.get_current_question(room_id))
 
     db.reset_round_status(room_id)
 
     return get_state()
 
+# after update, this is handled at html side.
 # @app.route("/api/select_team", methods=["POST"])
 # def select_team():
 #     room_id = request.args.get("room")
@@ -239,7 +292,7 @@ def place_guess():
     if db.get_room(room_id).team_answered.get(team):
         return get_state()
     db.set_team_coord(team, coord, room_id)
-    print(f"ACTION: Placed guess for team {team} in room {room_id} at ({coord[0]:.2f}, {coord[1]:.2f})")
+    dprint(f"ACTION: Placed guess for team {team} in room {room_id} at ({coord[0]:.2f}, {coord[1]:.2f})")
     return get_state()
 
 @app.route("/api/submit", methods=["POST"])
@@ -258,6 +311,7 @@ def submit_guess():
         return jsonify({"error": "No guess to submit"}), 400
     db.set_team_answered(team, True, room_id)
 
+    dprint(f"ACTION: Submitted guess for team {team} in room {room_id}")
     # whenever click, broadcast
     broadcast(room_id, "reveal")
     return get_state()
@@ -292,10 +346,11 @@ def agree_next():
     except Exception:
         return jsonify({"error": "Invalid team"}), 400
     db.set_team_ready_next(team, True, room_id)
-    if db.get_answer_revealed(room_id) and db.both_ready_next(room_id) and db.has_next_round(room_id):
+    if db.get_answer_revealed(room_id) and db.get_both_ready_next(room_id) and db.has_next_round(room_id):
         db.set_current_round(db.get_current_round(room_id) + 1, room_id)
         db.reset_round_status(room_id)
 
+    dprint(f"ACTION: Team {team} agreed to next round in room {room_id}")
     # Notify both clients to refresh
     broadcast(room_id, "next_round")
     return get_state()
@@ -327,4 +382,4 @@ if __name__ == "__main__":
     # Enable DEBUG_MODE if '--debug' arg provided or ENV DEBUG=true
     DEBUG_MODE = ("--debug" in sys.argv) or (str(os.environ.get("DEBUG", "")).lower() in {"1","true","yes"})
     print(f"DEBUG_MODE = {DEBUG_MODE}")
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)

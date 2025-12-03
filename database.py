@@ -1,5 +1,6 @@
 from typing import Iterable, Dict, Optional, List, Callable
 import os
+import threading
 
 from defs import *
 
@@ -18,49 +19,92 @@ loc_db: Dict[Loc, Coord] = {}
 que_db: Dict[int, Question] = {}
 
 # Per-room runtime state (ephemeral)
-from pydantic import BaseModel
 
-class RoomState(BaseModel):
+class RoomState():
     # sampler
-    category_sampler: Optional[Iterable[Category]] = None
-    question_sampler: Iterable[int] = iter([])
-    dmg_mult_selector: Callable[[int], float] = lambda idx: 1.0
+    category_sampler: Optional[Iterable[Category]]
+    question_sampler: Iterable[int]
+    dmg_mult_selector: Callable[[int], float]
     
     # persistent history
-    que_history: List[int] = []
-    round_index: int = -1
-    team_hp: Dict[Team, float] = {Team.BLUE: max_hp, Team.RED: max_hp}
+    que_history: List[int]
+    round_index: int
+    team_hp: Dict[Team, float]
     
     # round state
-    team_coord: Dict[Team, Optional[Coord]] = {Team.BLUE: None, Team.RED: None}
+    team_coord: Dict[Team, Optional[Coord]]
     
-    team_answered: Dict[Team, bool] = {Team.BLUE: False, Team.RED: False}
-    team_ready_next: Dict[Team, bool] = {Team.BLUE: False, Team.RED: False}
+    team_answered: Dict[Team, bool]
+    team_ready_next: Dict[Team, bool]
     
     # track if damage has been applied for the current round to avoid double-subtraction
     last_damage_applied_round: Optional[int] = None
 
-    @property
-    def answer_revealed(self) -> bool:
-        return all(self.team_answered.values())
-    
-    def force_answer_reveal(self) -> None:
-        for team in self.team_answered:
-            self.team_answered[team] = True
-    
-    def init_sampler(self, seed: int):
+    lock: Optional[threading.Lock] = None
+    def __init__(self, seed: int):
+        # sampler (fresh per instance)
         self.category_sampler = get_category_sampler(seed)
         self.question_sampler = get_question_sampler(seed)
         self.dmg_mult_selector = get_dmg_mult_selector(seed)
-    
+
+        # persistent history
+        self.que_history: List[int] = []
+        self.round_index: int = -1
+        self.team_hp: Dict[Team, float] = {
+            Team.BLUE: max_hp,
+            Team.RED: max_hp
+        }
+
+        # round state
+        self.team_coord: Dict[Team, Optional[Coord]] = {
+            Team.BLUE: None,
+            Team.RED: None
+        }
+        self.team_answered: Dict[Team, bool] = {
+            Team.BLUE: False,
+            Team.RED: False
+        }
+        self.team_ready_next: Dict[Team, bool] = {
+            Team.BLUE: False,
+            Team.RED: False
+        }
+
+        # track if damage already applied
+        self.last_damage_applied_round: Optional[int] = None
+
+        # per-room lock
+        self.lock = threading.Lock()
+
+    @property
+    def answer_revealed(self) -> bool:
+        return all(self.team_answered.values())
+
+    @property
+    def both_ready_next(self) -> bool:
+        return all(self.team_ready_next.values())
+
+    def force_answer_reveal(self) -> None:
+        for team in self.team_answered:
+            self.team_answered[team] = True
+
     def reset_round_status(self) -> None:
         self.team_coord = {Team.BLUE: None, Team.RED: None}
         self.team_answered = {Team.BLUE: False, Team.RED: False}
         self.team_ready_next = {Team.BLUE: False, Team.RED: False}
         self.last_damage_applied_round = None
-
+        
 # rooms registry
 rooms: Dict[str, RoomState] = {}
+
+def room_lock_guard(func):
+    def wrapper(*args, **kwargs):
+        room_id = kwargs.get('room_id') or args[-1]
+        room = get_room(room_id)
+        if room.lock is None:
+            raise RuntimeError("Room lock is not initialized.")
+        with room.lock:
+            return func(*args, **kwargs)
+    return wrapper
 
 def get_room(room_id: str) -> RoomState:
     if room_id not in rooms:
@@ -103,6 +147,7 @@ def sample_question(room_id: str) -> Question:
 
 # get question at specific history index
 # if the index is out of current history range, sample more questions until reaching that index
+@room_lock_guard
 def get_question_at(target_index: int, room_id: str) -> Question:
     assert 0 <= target_index < max_rounds, f"Target index {target_index} out of bounds."
     room = get_room(room_id)
@@ -138,32 +183,34 @@ def get_dmg_mult(room_id: str) -> float:
 def get_team_hp(team: Team, room_id: str) -> float:
     return get_room(room_id).team_hp[team]
 
+@room_lock_guard
 def set_team_hp(team: Team, hp: float, room_id: str):
     get_room(room_id).team_hp[team] = hp
     
 def get_team_coord(team: Team, room_id: str) -> Optional[Coord]:
     return get_room(room_id).team_coord[team]
 
+@room_lock_guard
 def set_team_coord(team: Team, coord: Optional[Coord], room_id: str):
     get_room(room_id).team_coord[team] = coord
 
-# Deprecated: selected team is session-specific; no per-room selected team state
-
+@room_lock_guard
 def set_team_answered(team: Team, answered: bool, room_id: str) -> None:
     get_room(room_id).team_answered[team] = answered
 
+@room_lock_guard
 def reset_round_status(room_id: str) -> None:
     get_room(room_id).reset_round_status()
 
 def get_answer_revealed(room_id: str) -> bool:
     return get_room(room_id).answer_revealed
 
+@room_lock_guard
 def set_team_ready_next(team: Team, ready: bool, room_id: str) -> None:
     get_room(room_id).team_ready_next[team] = ready
 
-def both_ready_next(room_id: str) -> bool:
-    room = get_room(room_id)
-    return all(room.team_ready_next.values())
+def get_both_ready_next(room_id: str) -> bool:
+    return get_room(room_id).both_ready_next
 
 def init_database():    
     # load loc_db
@@ -200,6 +247,5 @@ def init_room(room_id: str):
     if room_id in rooms:
         pass
     else:
-        rooms[room_id] = RoomState()
-        rooms[room_id].init_sampler(seed=sum(ord(c) for c in room_id))
+        rooms[room_id] = RoomState(seed=sum(ord(c) for c in room_id))
     set_current_round(0, room_id)

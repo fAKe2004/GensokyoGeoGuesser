@@ -23,7 +23,7 @@ class Question(BaseModel):
 
 
 # hyperparameters
-max_rounds = 20
+max_rounds = 2
 max_hp = 100.0
 
 place_guess_timeout = 60 # in seconds

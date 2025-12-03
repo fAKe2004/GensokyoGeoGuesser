@@ -5,9 +5,28 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Lobby • Gensokyo Geo-Guesser</title>
   <style>
-    body { font-family: system-ui, sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; background:#f7f7fb; }
-    .card { background:#fff; padding:20px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.12); width: min(480px, 92vw); }
-    h1 { margin:0 0 12px; font-size:20px; }
+    body {
+      font-family: system-ui, sans-serif;
+      display:flex; align-items:center; justify-content:center;
+      min-height:100vh;
+      /* Lobby background image */
+      background: url('media/lobby_background.png') center center / cover no-repeat fixed;
+    }
+    .card {
+      /* Semi-transparent front box over the background */
+      background: rgba(255,255,255,0.7);
+      padding:20px; border-radius:12px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.20);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      /* Position the card 2/5 from the top of the viewport (fixed to viewport so top:40vh is reliable) */
+      position: absolute;
+      top: 18vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(500px, 92vw);
+    }
+    h1 { margin:0 0 18px; font-size:20px;  }
     .row { display:flex; gap:10px; margin:10px 0; }
     .row label { min-width: 90px; font-weight:600; }
     input[type="text"] { flex:1; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:14px; }
@@ -20,47 +39,88 @@
 </head>
 <body>
   <div class="card">
-    <h1>Lobby</h1>
+    <h1>Gensokyo Geo-Guesser | Lobby </h1> 
     <div class="row">
-      <label for="room">Room</label>
-      <input id="room" type="text" placeholder="e.g., room-1" />
+  <label for="room">Room ID</label>
+  <input id="room" type="text" placeholder="Leave blank for quick match" />
     </div>
-    <div class="row">
-      <label>Team</label>
-      <div class="team">
-        <button class="btn" data-team="blue">Blue</button>
-        <button class="btn" data-team="red">Red</button>
+    <div class="row" style="justify-content:flex-end; gap:10px;">
+      <button id="go" class="btn primary"> Play </button>
+    </div>
+    <div id="waiting" style="display:none; margin-top:12px; text-align:center;">
+      <div class="spinner" style="margin:0 auto; width:28px; height:28px; border:3px solid #ddd; border-top-color:#5557EE; border-radius:50%; animation: spin 0.8s linear infinite;"></div>
+      <div style="margin-top:8px; color:#666; font-size:12px;">Matching… waiting for an opponent</div>
+      <div style="margin-top:10px;">
+        <button id="cancel" class="btn">Cancel</button>
       </div>
     </div>
-    <div class="row" style="justify-content:flex-end;">
-      <button id="enter" class="btn primary">Enter Room</button>
-    </div>
-    <p class="note">This lobby does not match you with others; it only lets you choose a room and team for play.</p>
+    <style>
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
   </div>
   <script>
     const roomInput = document.getElementById('room');
-    const teamButtons = document.querySelectorAll('.team .btn');
-    const enterBtn = document.getElementById('enter');
-    let selectedTeam = 'blue';
-
-    teamButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        selectedTeam = btn.dataset.team;
-        teamButtons.forEach(b => b.classList.remove('primary'));
-        btn.classList.add('primary');
-      });
-    });
+    const goBtn = document.getElementById('go');
+    const waiting = document.getElementById('waiting');
+  const cancelBtn = document.getElementById('cancel');
 
     function post(url, body) {
       return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
     }
 
-    enterBtn.addEventListener('click', async () => {
-      const room = (roomInput.value || 'default').trim();
-      // Initialize room state; team is maintained client-side via URL
-      await post(`/api/init?room=${encodeURIComponent(room)}`, {});
-      // Navigate to game with room and team parameters
-      window.location.href = `/index.html?room=${encodeURIComponent(room)}&team=${encodeURIComponent(selectedTeam)}`;
+    goBtn.addEventListener('click', async () => {
+      // Prevent double-click self-matching by disabling the Play button immediately
+      goBtn.disabled = true;
+      goBtn.classList.add('disabled');
+      const room = (roomInput.value || '').trim();
+      // Unified flow: if room provided, enter it (init + start as blue);
+      // if not provided, quick match using SSE (first blue, second red).
+      waiting.style.display = 'block';
+      let timer = null; // unused, kept for symmetry with cleanup paths
+      const res = await post('/api/lobby/quick_match', room ? { room } : {});
+      if (res.error) {
+        if (timer) clearInterval(timer);
+        waiting.style.display = 'none';
+        alert(res.error);
+        return;
+      }
+      if (res.matched) {
+        if (timer) clearInterval(timer);
+        const { room, team } = res;
+        await post(`/api/init?room=${encodeURIComponent(room)}`, {});
+        window.location.href = `/index.html?room=${encodeURIComponent(room)}&team=${encodeURIComponent(team)}`;
+      } else {
+        const channel = res.channel;
+        const evt = new EventSource(`/lobby/events/${encodeURIComponent(channel)}`);
+        // Send heartbeat pings to keep the session alive while waiting
+        const pingTimer = setInterval(() => { post('/api/lobby/ping', { channel }); }, 1000);
+
+        // Allow user to cancel: stop pings, close SSE, hide waiting UI
+        const onCancel = () => {
+          if (timer) clearInterval(timer);
+          clearInterval(pingTimer);
+          try { evt.close(); } catch {}
+          waiting.style.display = 'none';
+          // Re-enable Play button after cancel
+          goBtn.disabled = false;
+          goBtn.classList.remove('disabled');
+        };
+        cancelBtn.onclick = onCancel;
+
+        evt.onmessage = async (e) => {
+          const data = e.data || '';
+          if (data.startsWith('matched:')) {
+            if (timer) clearInterval(timer);
+            clearInterval(pingTimer);
+            const parts = data.split(':');
+            const room = parts[1];
+            const team = parts[2];
+            evt.close();
+            await post(`/api/init?room=${encodeURIComponent(room)}`, {});
+            window.location.href = `/index.html?room=${encodeURIComponent(room)}&team=${encodeURIComponent(team)}`;
+          }
+        };
+      }
     });
   </script>
 </body>
