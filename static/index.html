@@ -98,7 +98,7 @@
             <div class="map-credit">We give acknowledgement to MC幻想郷 circle for kindly sharing their map.</div>
         </div>
     <div id="right-panel">
-    <h2 class="panel-title">Round <span id="round-current" class="badge-round">?</span> / <span id="round-max" class="badge-round secondary">?</span></h2>
+    <h2 class="panel-title">Round <span id="round-current" class="badge-round">?</span> / <span id="round-max" class="badge-round secondary">?</span><span id="round-countdown" style="margin-left:auto; font-size:16px; font-weight:700; color:#111;">--:--</span></h2>
                 <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span>
                     <span id="team-label" style="margin-left:auto; font-weight:700;"></span>
                 </div>
@@ -211,8 +211,77 @@
     const toLobbyBtn = document.getElementById('to-lobby');
     const teamLabelEl = document.getElementById('team-label');
     const submitBtn = document.getElementById('submit-btn');
+    const countdownEl = document.getElementById('round-countdown');
+    let countdownTimer = null;
+    let countdownEndAt = 0; // epoch ms when timer ends
+    let countdownPhase = null; // 'guess' | 'agree'
+
+    function formatMMSS(totalSeconds) {
+        const s = Math.max(0, Math.floor(totalSeconds));
+        const mm = String(Math.floor(s / 60)).padStart(2, '0');
+        const ss = String(s % 60).padStart(2, '0');
+        return `${mm}:${ss}`;
+    }
+
+    function stopCountdown() {
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        countdownEndAt = 0;
+        countdownPhase = null;
+    }
+
+    function startCountdown(remainingSeconds, phase) {
+        stopCountdown();
+        countdownPhase = phase;
+        countdownEndAt = Date.now() + (Math.max(0, Number(remainingSeconds) || 0) * 1000);
+
+        const timerTick = () => {
+            if (countdownEndAt <= 0)
+                return
+
+            const leftMs = countdownEndAt - Date.now();
+            const leftSec = Math.ceil(leftMs / 1000);
+            countdownEl.textContent = formatMMSS(leftSec);
+
+            if (leftMs <= 0) {
+
+                // Auto action on timeout
+                if (countdownPhase === 'guess') {
+                    const isBlue = state.selectedTeam === 'blue';
+                    const hasGuess = !!(isBlue ? stateLast?.coords?.blue : stateLast?.coords?.red);
+                    const answered = isBlue ? !!stateLast?.team_answered?.blue : !!stateLast?.team_answered?.red;
+                    if (!hasGuess && !answered) {
+                        // Place a default center pin before submitting
+                        postAction('/api/place_guess', { lat: 0.5, lon: 0.5 }, { includeTeam: true })
+                          .then(() => {
+                              // After placing the default guess, immediately click submit.
+                              submitBtn.click();
+                              console.log('[countdown] Auto-placed default guess and submitted on timeout.');
+                          });
+                    } else if (hasGuess && !answered) {
+                        submitBtn.click();
+                        console.log('[countdown] Auto-submitted existing guess on timeout.');
+                    }
+                } else if (countdownPhase === 'agree_next') {
+                    // The main submit button now handles both "submit" and "next"
+                    if (!submitBtn.disabled) {
+                        submitBtn.click();
+                        console.log('[countdown] Auto-clicked next on timeout.');
+                    }
+                } else {
+                    console.warn('[countdown] Unknown phase on timeout:', countdownPhase);
+                }
+                stopCountdown(); // This will clear countdownPhase... so put after the action
+            }
+        };
+
+        timerTick(); // Initial render
+        countdownTimer = setInterval(timerTick, 250);
+    }
+
+    let stateLast = null; // keep last state for countdown decisions
 
         function updateUI(data) {
+            stateLast = data;
             // Update Round & Mult badges (beautified)
             // Round display: current / max (if available)
             roundCurEl.textContent = `${data.round}`;
@@ -283,6 +352,20 @@
 
             prevBtn.disabled = !data.has_prev;
             nextBtn.disabled = !data.has_next;
+
+            // Countdown handling based on backend phase and remaining seconds
+            const phase = String(data?.phase || '').toLowerCase();
+            const remaining = Number(data?.phase_remaining_seconds || 0);
+            
+            // const phaseChanged = (!stateLast) || (phase !== String(stateLast?.phase || '').toLowerCase());
+            // const timerNeedsRestart = phaseChanged || !countdownTimer;
+            // console.log(`[countdown] phase=${phase} remaining=${remaining} timerNeedsRestart=${timerNeedsRestart}, !countdownTimer=${!!countdownTimer}, phaseChanged=${phaseChanged}`);
+            const timerNeedsRestart = true; // always restart to sync time
+
+            if (timerNeedsRestart) {
+                startCountdown(remaining, phase);
+            }
+
             // Hide admin controls unless in debug mode
             const adminControls = [prevBtn, nextBtn, revealBtn, selectBlueBtn, selectRedBtn];
             adminControls.forEach(el => {
@@ -457,11 +540,26 @@
 
         function postAction(url, body, opts = {}) {
             const teamQ = opts.includeTeam ? `&team=${encodeURIComponent(teamParam || state.selectedTeam)}` : '';
+            console.log(`[postAction] URL: ${url}?room=${encodeURIComponent(roomId)}${teamQ}`, 'Body:', body);
             return fetch(`${url}?room=${encodeURIComponent(roomId)}${teamQ}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
-            }).then(response => response.json());
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(`[postAction] Response for ${url}:`, data);
+                if (data.error) {
+                    alert(data.error);
+                    // Don't proceed with UI update if there's an error
+                    throw new Error(data.error);
+                }
+                // Always update UI with the state returned from the action
+                updateUI(data);
+                // Then, schedule a follow-up fetch to ensure long-term consistency
+                setTimeout(fetchState, 100);
+                return data; // Pass data to the next .then() if needed
+            });
         }
 
         // Client-side team selection via URL query; enabled in debug (buttons visible only when debug)
@@ -498,14 +596,24 @@
 
         // Submit/Next button behavior
         submitBtn.addEventListener('click', () => {
+            console.log(`[submitBtn] Clicked. Text content: "${submitBtn.textContent}"`);
+            submitBtn.disabled = true; // Disable immediately to prevent double-clicks
             if (submitBtn.textContent === 'submit') {
+                console.log('[submitBtn] Submitting guess...');
                 postAction('/api/submit', {}, { includeTeam: true })
-                    .then(data => { submitBtn.disabled = true; updateUI(data); })
-                    .then(() => fetchState());
+                    .catch(err => {
+                        console.error('[submitBtn] Submit failed:', err);
+                        // Re-enable button on failure
+                        submitBtn.disabled = false;
+                    });
             } else {
+                console.log('[submitBtn] Agreeing to next round...');
                 postAction('/api/agree_next', {}, { includeTeam: true })
-                    .then(data => { submitBtn.disabled = true; updateUI(data); })
-                    .then(() => fetchState());
+                    .catch(err => {
+                        console.error('[submitBtn] Agree next failed:', err);
+                        // Re-enable button on failure
+                        submitBtn.disabled = false;
+                    });
             }
         });
 
@@ -536,21 +644,25 @@
             const lat = y / rect.height;
             const lon = x / rect.width;
             
+            console.log(`[mapClick] Map clicked at (${lat.toFixed(3)}, ${lon.toFixed(3)})`);
+
             // Use normalized selected team when placing local pin
             const teamColor = state.selectedTeam === 'blue' ? 'blue' : 'red';
             // If already submitted, do not allow placing guess (no local pin movement)
-            const answered = state.selectedTeam === 'blue' ? !!state.data?.team_answered?.blue : !!state.data?.team_answered?.red;
-            if (answered) return;
+            const answered = state.selectedTeam === 'blue' ? !!stateLast?.team_answered?.blue : !!stateLast?.team_answered?.red;
+            if (answered) {
+                console.log('[mapClick] Guess ignored: already answered.');
+                return;
+            }
 
             // Server tracks selected team globally; send coords and refresh UI with returned state
-            postAction('/api/place_guess', { lat, lon, team: state.selectedTeam }, { includeTeam: true })
-                .then(data => { updateUI(data); /* after server confirms, local pin updates via data */ })
-                .then(() => fetchState())
+            console.log('[mapClick] Placing guess...');
+            postAction('/api/place_guess', { lat, lon }, { includeTeam: true })
                 .catch(err => console.error('place_guess failed', err));
         });
         
         // Initial load
-        postAction('/api/init').then(updateUI).then(() => fetchState());
+        fetchState();
 
         // Server-Sent Events: listen for room events and refresh UI (soft update)
         try {

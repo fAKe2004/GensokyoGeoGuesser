@@ -26,8 +26,8 @@ class Question(BaseModel):
 max_rounds = 2
 max_hp = 100.0
 
-place_guess_timeout = 60 # in seconds
-agree_next_timeout = 6 # in seconds
+place_guess_timeout = 30 # in seconds
+agree_next_timeout = 5 # in seconds
 
 # remark: the internal coordinate system normalizes to [0, 1]
 distance_scale = 100

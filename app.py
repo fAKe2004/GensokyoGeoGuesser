@@ -1,7 +1,7 @@
-from flask import Flask, jsonify, request, send_from_directory, redirect
+from flask import Flask, jsonify, request, send_from_directory, redirect, Response
 import os
 import queue
-from flask import Response
+import time
 
 import database as db
 import calc
@@ -150,10 +150,24 @@ def get_state():
                 "red": db.get_team_coord(Team.RED, room_id) if team == "red" else None,
             }
 
+    # Determine current phase (from room state) and compute remaining seconds server-side
+    current_phase = 'agree_next' if db.get_answer_revealed(room_id) else 'guess'
+    phase_started_at = db.get_phase_started_at(room_id)
+    now_sec = time.time()    
+    if current_phase == 'guess':
+        remaining_seconds = place_guess_timeout - (now_sec - phase_started_at)
+    else:
+        remaining_seconds = agree_next_timeout - (now_sec - phase_started_at)
+    remaining_seconds = max(remaining_seconds, 0)
+        
+
     state = {
         "round": db.get_current_round(room_id) + 1, # to 1-indexed.
         "dmg_mult": db.get_dmg_mult(room_id),
         "total_rounds": max_rounds,
+        # Synced countdown: backend phase and remaining seconds to avoid clock skew
+        "phase": current_phase,
+        "phase_remaining_seconds": max(0, int(remaining_seconds)),
         "question_comment": question.comment,
         "team": team_value,  # session-specific; client controls selection
         "hp": {

@@ -1,3 +1,4 @@
+import time
 from typing import Iterable, Dict, Optional, List, Callable
 import os
 import threading
@@ -38,9 +39,14 @@ class RoomState():
     team_ready_next: Dict[Team, bool]
     
     # track if damage has been applied for the current round to avoid double-subtraction
-    last_damage_applied_round: Optional[int] = None
+    last_damage_applied_round: Optional[int]
 
-    lock: Optional[threading.Lock] = None
+    # server-side timestamp
+    phase_started_at: float
+
+    # per-room lock
+    lock: Optional[threading.Lock]
+    
     def __init__(self, seed: int):
         # sampler (fresh per instance)
         self.category_sampler = get_category_sampler(seed)
@@ -72,6 +78,9 @@ class RoomState():
         # track if damage already applied
         self.last_damage_applied_round: Optional[int] = None
 
+        # phase tracking for synced countdown
+        self.phase_started_at = time.time()
+
         # per-room lock
         self.lock = threading.Lock()
 
@@ -92,6 +101,8 @@ class RoomState():
         self.team_answered = {Team.BLUE: False, Team.RED: False}
         self.team_ready_next = {Team.BLUE: False, Team.RED: False}
         self.last_damage_applied_round = None
+        # start guess phase and timestamp
+        self.phase_started_at = time.time()
         
 # rooms registry
 rooms: Dict[str, RoomState] = {}
@@ -108,7 +119,9 @@ def room_lock_guard(func):
 
 def get_room(room_id: str) -> RoomState:
     if room_id not in rooms:
-        rooms[room_id] = RoomState()
+        # rooms[room_id] = RoomState()
+        # bugfix: seed was not passed to constructor
+        rooms[room_id] = RoomState(seed=sum(ord(c) for c in room_id))
     return rooms[room_id]
 
 def sample_question(room_id: str) -> Question:
@@ -196,7 +209,13 @@ def set_team_coord(team: Team, coord: Optional[Coord], room_id: str):
 
 @room_lock_guard
 def set_team_answered(team: Team, answered: bool, room_id: str) -> None:
-    get_room(room_id).team_answered[team] = answered
+    room = get_room(room_id)
+    before = room.answer_revealed
+    room.team_answered[team] = answered
+    after = room.answer_revealed
+    if before != after:
+        # phase started at update
+        room.phase_started_at = time.time()
 
 @room_lock_guard
 def reset_round_status(room_id: str) -> None:
@@ -211,6 +230,12 @@ def set_team_ready_next(team: Team, ready: bool, room_id: str) -> None:
 
 def get_both_ready_next(room_id: str) -> bool:
     return get_room(room_id).both_ready_next
+
+# def get_phase(room_id: str) -> str:
+#     return get_room(room_id)
+
+def get_phase_started_at(room_id: str) -> float:
+    return get_room(room_id).phase_started_at
 
 def init_database():    
     # load loc_db
