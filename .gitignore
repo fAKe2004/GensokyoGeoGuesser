@@ -1,0 +1,55 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Unit test / coverage reports
+.pytest_cache/
+.coverage*
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter/IPython
+.ipynb_checkpoints/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# Flask/Dev artifacts
+instance/
+
+# Local data/media caches (keep actual data/ checked in if desired)
+# Uncomment if you don't want to commit large local assets
+# data/
+# static/media/
+
+# Environment variables
+*.env
+.env*
+
+# Misc
+*.bak

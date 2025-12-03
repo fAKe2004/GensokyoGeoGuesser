@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gensokyo Geo-Guesser</title>
+  <style>
+    :root { --gap: 6px; }
+    body {
+      font-family: system-ui, sans-serif;
+      display:flex; flex-direction:column; align-items:center;
+      padding:20px;
+      min-height: 100vh;
+      background-color: #ffffff;
+    }
+    h1 { margin:8px 0 16px; }
+    .team-btn { min-width: 110px; padding:10px 14px; border-radius:9999px; border:2px solid #ddd; font-size:14px; font-weight:700; background:#fff; cursor:pointer; transition:.15s; }
+    .team-btn.red.active { background:#EE5755; color:#fff; border-color:#EE5755; }
+    .team-btn.blue.active { background:#5557EE; color:#fff; border-color:#5557EE; }
+    .team-btn:hover { border-color:#bbb; background:#f9f9f9; }
+    #game-area { display:flex; justify-content:center; align-items:flex-start; width:100%; max-width:1200px; gap:24px; margin-top:12px; }
+    #left-panel { flex:2; display:flex; flex-direction:column; gap:8px; }
+    #map-container { position:relative; width:100%; box-shadow:0 4px 12px rgba(0,0,0,0.15); border-radius:12px; overflow:hidden; background:#fff; }
+    #map { width:100%; display:block; }
+    .map-credit { font-size:12px; color:#666; text-align:center; line-height:1.3; }
+    /* SVG overlay for guess->answer lines */
+    #map-overlay { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+    #right-panel { flex:1; display:flex; flex-direction:column; gap:12px; max-width:420px; }
+    .panel-title { margin:0; font-size:20px; font-weight:700; display:flex; align-items:center; gap:8px; }
+    .badge { background:#222; color:#fff; padding:4px 10px; border-radius:999px; font-size:14px; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,0.25); }
+    /* Use a neutral color for multiplier to avoid BLUE/RED association */
+    .badge-accent { background:#6b7280; /* neutral gray */ }
+    .mult-box { font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; }
+    #question-container { display:flex; flex-direction:column; gap:6px; }
+    #question-img { width:100%; border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,0.15); }
+    #question-comment { font-size:14px; padding:6px 10px; background:#f5f5f7; border-radius:8px; line-height:1.3; text-align:center; }
+    #answer-info { font-size:14px; padding:6px 10px; background:#eafbea; border:1px solid #c7e9c7; border-radius:8px; }
+    .answer-label { font-weight:600; }
+    .answer-coord { font-size:12px; color:#2d662d; }
+    .stats-grid { display:grid; grid-template-columns: 1fr auto 1fr; row-gap:6px; column-gap:12px; align-items:center; background:#fff; padding:12px 14px; border:1px solid #e2e2e2; border-radius:12px; box-shadow:0 2px 4px rgba(0,0,0,0.06); }
+    .stats-grid .col { text-align:center; }
+    .stats-grid .blue-label { font-size:16px; font-weight:800; color:#5557EE; }
+    .stats-grid .red-label { font-size:16px; font-weight:800; color:#EE5755; }
+    .stats-grid .stat-header { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:#555; }
+    .stats-grid .stat-header.dim { color:#999; }
+    /* HP larger; distance/damage smaller and orange */
+    .stats-grid .stat-val.hp { font-size:22px; font-weight:800; }
+    .stats-grid .stat-val.small { font-size:16px; font-weight:700; color:#c05621; }
+    .select-row { display:flex; justify-content:space-between; gap:12px; }
+    .controls.inline { display:flex; gap:10px; }
+    .controls.inline button { flex:1; padding:10px 12px; border-radius:10px; border:2px solid #ddd; background:#fff; font-size:14px; font-weight:700; cursor:pointer; transition:.15s; }
+    .controls.inline button:hover { background:#f0f0f0; border-color:#bbb; }
+    .controls.inline button:disabled { opacity:.5; cursor:not-allowed; }
+
+    /* Reference Map overlay */
+    #ref-overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:1000; }
+    #ref-overlay.open { display:flex; }
+    #ref-overlay .panel { background:#fff; padding:12px; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,0.35); max-width:95vw; max-height:95vh; }
+    #ref-overlay img { display:block; max-width:90vw; max-height:85vh; border-radius:8px; }
+
+    .pin {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        border: 2px solid white;
+        box-shadow: 0 0 5px rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body>
+  <h1>Gensokyo Geo-Guesser</h1>
+
+  <!-- HUD removed: stats now in right panel -->
+
+    <!-- Selection moved to right panel -->
+
+    <div id="game-area">
+        <div id="left-panel">
+            <div id="map-container">
+                    <img id="map" src="media/map.jpg" alt="Gensokyo Map">
+                    <svg id="map-overlay" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="map-credit">We give acknowledgement to MC幻想郷 circle for kindly sharing their map.</div>
+        </div>
+    <div id="right-panel">
+        <h2 class="panel-title">Round <span id="round" class="badge">?</span></h2>
+        <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span></div>
+        <div id="question-container">
+            <img id="question-img" src="" alt="Question Image">
+            <div id="question-comment" style="display:none;"></div>
+            <div id="answer-info" style="display:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                <span class="answer-label">Answer: <span id="answer-name">--</span></span>
+            </div>
+        </div>
+        <div id="stats-grid" class="stats-grid">
+            <!-- Header row: team labels -->
+            <div class="col blue-label">BLUE</div>
+            <div class="col stat-header">label</div>
+            <div class="col red-label">RED</div>
+            <!-- HP row -->
+            <div class="col stat-val hp" id="hp-blue">?</div>
+            <div class="col stat-header">HP</div>
+            <div class="col stat-val hp" id="hp-red">?</div>
+            <!-- Guess row (debug only) -->
+            <div class="col stat-val small" id="guess-blue" style="display:none;">—</div>
+            <div class="col stat-header dim" id="guess-label" style="display:none;">guess</div>
+            <div class="col stat-val small" id="guess-red" style="display:none;">—</div>
+            <!-- Distance row -->
+            <div class="col stat-val small" id="dis-blue">?</div>
+            <div class="col stat-header dim">distance</div>
+            <div class="col stat-val small" id="dis-red">?</div>
+            <!-- Damage row -->
+            <div class="col stat-val small" id="dmg-blue">?</div>
+            <div class="col stat-header dim">damage</div>
+            <div class="col stat-val small" id="dmg-red">?</div>
+        </div>
+        <div class="select-row">
+            <button class="team-btn blue" id="select-blue">select blue</button>
+            <button class="team-btn red" id="select-red">select red</button>
+        </div>
+        <div class="controls inline">
+            <button id="prev-btn">prev</button>
+            <button id="reveal-btn">reveal answer</button>
+            <button id="next-btn">next</button>
+        </div>
+                <div class="controls inline">
+                        <button id="refmap-btn" title="Show annotated reference map">reference map</button>
+                </div>
+    </div>
+  </div>
+
+    <!-- Bottom controls removed -->
+
+    <!-- Reference Map Overlay -->
+    <div id="ref-overlay" aria-hidden="true">
+        <div class="panel" role="dialog" aria-label="Reference Map">
+            <img id="ref-map-img" src="media/ref_map.jpg" alt="Reference Map of Gensokyo with labels" />
+        </div>
+    </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const state = {
+            selectedTeam: 'blue',
+            pins: {
+                blue: null,
+                red: null,
+                answer: null
+            }
+        };
+
+        const roundEl = document.getElementById('round');
+        const dmgMultEl = document.getElementById('dmg-mult');
+        const hpBlueEl = document.getElementById('hp-blue');
+        const hpRedEl = document.getElementById('hp-red');
+    const dmgBlueEl = document.getElementById('dmg-blue');
+    const dmgRedEl = document.getElementById('dmg-red');
+    const disBlueEl = document.getElementById('dis-blue');
+    const disRedEl = document.getElementById('dis-red');
+    const commentEl = document.getElementById('question-comment');
+        const selectBlueBtn = document.getElementById('select-blue');
+        const selectRedBtn = document.getElementById('select-red');
+        const questionImgEl = document.getElementById('question-img');
+        const mapContainer = document.getElementById('map-container');
+    const mapEl = document.getElementById('map');
+    const overlaySvg = document.getElementById('map-overlay');
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const revealBtn = document.getElementById('reveal-btn');
+    const refBtn = document.getElementById('refmap-btn');
+    const refOverlay = document.getElementById('ref-overlay');
+
+        function updateUI(data) {
+            // Update Round & Mult badges (beautified)
+            roundEl.textContent = `${data.round}`;
+            dmgMultEl.textContent = `${data.dmg_mult}x`;
+            hpBlueEl.textContent = data.hp.blue.toFixed(2);
+            hpRedEl.textContent = data.hp.red.toFixed(2);
+            questionImgEl.src = data.question_img;
+
+            // Guess row in debug mode
+            const guessBlueEl = document.getElementById('guess-blue');
+            const guessRedEl = document.getElementById('guess-red');
+            const guessLabelEl = document.getElementById('guess-label');
+            if (data.debug) {
+                guessLabelEl.style.display = '';
+                guessBlueEl.style.display = '';
+                guessRedEl.style.display = '';
+                const gb = data.coords?.blue;
+                const gr = data.coords?.red;
+                guessBlueEl.textContent = (gb && gb.length === 2) ? `(${gb[0].toFixed(3)}, ${gb[1].toFixed(3)})` : '—';
+                guessRedEl.textContent = (gr && gr.length === 2) ? `(${gr[0].toFixed(3)}, ${gr[1].toFixed(3)})` : '—';
+            } else {
+                guessLabelEl.style.display = 'none';
+                guessBlueEl.style.display = 'none';
+                guessRedEl.style.display = 'none';
+            }
+
+            // Question comment
+            const qComment = data.question_comment;
+            if (qComment && String(qComment).trim().length > 0) {
+                commentEl.style.display = '';
+                commentEl.textContent = String(qComment);
+            } else {
+                commentEl.style.display = 'none';
+                commentEl.textContent = '';
+            }
+
+            // Damage and distance rows (only after reveal)
+            if (data.damage) {
+                const dmgBlue = Number(data.damage.blue ?? NaN);
+                const dmgRed = Number(data.damage.red ?? NaN);
+                const mult = Number(data.dmg_mult ?? 1);
+                if (Number.isFinite(dmgBlue)) {
+                    // Show as negative values and in smaller orange style (CSS already applied)
+                    dmgBlueEl.textContent = `-${dmgBlue.toFixed(2)}`;
+                    disBlueEl.textContent = `-${(dmgBlue / mult).toFixed(2)}`;
+                } else {
+                    dmgBlueEl.textContent = '?';
+                    disBlueEl.textContent = '?';
+                }
+                if (Number.isFinite(dmgRed)) {
+                    dmgRedEl.textContent = `-${dmgRed.toFixed(2)}`;
+                    disRedEl.textContent = `-${(dmgRed / mult).toFixed(2)}`;
+                } else {
+                    dmgRedEl.textContent = '?';
+                    disRedEl.textContent = '?';
+                }
+            } else {
+                dmgBlueEl.textContent = '?';
+                dmgRedEl.textContent = '?';
+                disBlueEl.textContent = '?';
+                disRedEl.textContent = '?';
+            }
+
+            // Normalize selected team from server (e.g., "Blue"/"Red") to lowercase for UI logic
+            state.selectedTeam = String(data.selected_team || state.selectedTeam || 'blue').toLowerCase();
+            const isBlue = state.selectedTeam === 'blue';
+            selectBlueBtn.classList.toggle('active', isBlue);
+            selectRedBtn.classList.toggle('active', !isBlue);
+
+            prevBtn.disabled = !data.has_prev;
+            nextBtn.disabled = !data.has_next;
+            
+            // Clear existing pins
+            Object.values(state.pins).forEach(pin => pin && pin.remove());
+
+            // Redraw pins
+            if (data.coords.blue) {
+                addPin(data.coords.blue, 'blue');
+            }
+            if (data.coords.red) {
+                addPin(data.coords.red, 'red');
+            }
+            // Only show answer pin and info after reveal
+            const ansInfo = document.getElementById('answer-info');
+            const ansName = document.getElementById('answer-name');
+            const revealed = !!data.answer_revealed;
+            if (revealed && data.answer_coord) {
+                addPin(data.answer_coord, 'green', 'answer');
+                ansInfo.style.display = '';
+                const name = data.answer_loc?.name ?? '';
+                const lat = data.answer_loc?.lat;
+                const lon = data.answer_loc?.lon;
+                ansName.textContent = String(name || '--');
+                if (data.debug && lat != null && lon != null) {
+                    ansName.textContent += ` (${lat.toFixed(3)}, ${lon.toFixed(3)})`;
+                }
+                // Draw guess->answer lines for each team
+                redrawLines(data);
+            } else {
+                ansInfo.style.display = 'none';
+                clearLines();
+            }
+        }
+
+        function clearLines() {
+            if (!overlaySvg) return;
+            while (overlaySvg.firstChild) overlaySvg.removeChild(overlaySvg.firstChild);
+        }
+
+        function redrawLines(data) {
+            clearLines();
+            if (!overlaySvg || !data?.answer_coord) return;
+            const ans = data.answer_coord; // [lat, lon]
+            const draw = (from, color) => {
+                if (!from) return;
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', String(from[1] * 100));
+                line.setAttribute('y1', String(from[0] * 100));
+                line.setAttribute('x2', String(ans[1] * 100));
+                line.setAttribute('y2', String(ans[0] * 100));
+                line.setAttribute('stroke', color);
+                line.setAttribute('stroke-width', '1.75');
+                line.setAttribute('opacity', '0.9');
+                line.setAttribute('vector-effect', 'non-scaling-stroke');
+                line.setAttribute('stroke-linecap', 'round');
+                overlaySvg.appendChild(line);
+            };
+            // Team colors
+            const blue = '#5557EE';
+            const red = '#EE5755';
+            if (data.coords?.blue) draw(data.coords.blue, blue);
+            if (data.coords?.red) draw(data.coords.red, red);
+        }
+
+        function addPin(coord, color, type = color) {
+            const pin = document.createElement('div');
+            pin.className = 'pin';
+            pin.style.backgroundColor = color;
+            pin.style.left = `${coord[1] * 100}%`;
+            pin.style.top = `${coord[0] * 100}%`;
+            mapContainer.appendChild(pin);
+            if (state.pins[type]) {
+                state.pins[type].remove();
+            }
+            state.pins[type] = pin;
+        }
+
+        function fetchState() {
+            fetch('/api/state')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+                    updateUI(data);
+                });
+        }
+
+        function postAction(url, body) {
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(response => response.json());
+        }
+
+        selectBlueBtn.addEventListener('click', () => {
+            postAction('/api/select_team', { team: 'blue' }).then(updateUI);
+        });
+
+        selectRedBtn.addEventListener('click', () => {
+            postAction('/api/select_team', { team: 'red' }).then(updateUI);
+        });
+
+        prevBtn.addEventListener('click', () => {
+            postAction('/api/prev_round').then(updateUI);
+        });
+
+        nextBtn.addEventListener('click', () => {
+            postAction('/api/next_round').then(updateUI);
+        });
+
+        revealBtn.addEventListener('click', () => {
+            fetch('/api/reveal')
+                .then(response => response.json())
+                .then(updateUI);
+        });
+
+        // Reference map overlay open/close
+        if (refBtn && refOverlay) {
+            refBtn.addEventListener('click', () => {
+                refOverlay.classList.add('open');
+                refOverlay.setAttribute('aria-hidden', 'false');
+            });
+            refOverlay.addEventListener('click', (e) => {
+                if (e.target === refOverlay) {
+                    refOverlay.classList.remove('open');
+                    refOverlay.setAttribute('aria-hidden', 'true');
+                }
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && refOverlay.classList.contains('open')) {
+                    refOverlay.classList.remove('open');
+                    refOverlay.setAttribute('aria-hidden', 'true');
+                }
+            });
+        }
+
+        mapEl.addEventListener('click', (e) => {
+            const rect = mapEl.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const lat = y / rect.height;
+            const lon = x / rect.width;
+            
+            // Use normalized selected team when placing local pin
+            const teamColor = state.selectedTeam === 'blue' ? 'blue' : 'red';
+            addPin([lat, lon], teamColor);
+
+            // Server tracks selected team globally; send coords and refresh UI with returned state
+            postAction('/api/place_guess', { lat, lon, team: state.selectedTeam })
+                .then(updateUI)
+                .catch(err => console.error('place_guess failed', err));
+        });
+        
+        // Initial load
+        postAction('/api/init').then(updateUI);
+    });
+  </script>
+</body>
+</html>
