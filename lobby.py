@@ -97,7 +97,7 @@ def prune_stale_waiters(timeout_sec: float = 2) -> None:
         pass
 
 def prune_stale_rooms() -> None:
-    """Destroy rooms that have been marked ENDED for more than 10 seconds."""
+    """Destroy rooms that have been marked ENDED."""
     try:
         to_destroy: list[str] = [
             room_id for room_id, status in room_status.items()
@@ -162,7 +162,20 @@ def join_match(optional_room_id: Optional[str]) -> Tuple[Optional[str], Optional
             channel_id = f"globalwait:{uuid.uuid4().hex}"
             waiting_global_channel = channel_id
             return None, channel_id, Team.BLUE, None
-        
+
+@lobby_lock_guard
+def cancel_waiting(optional_room_id: Optional[str]) -> None:
+    global waiting_global_channel
+    if optional_room_id:
+        room_id = optional_room_id
+        channel = waiting_per_room_channel.get(room_id)
+        if channel:
+            waiting_per_room_channel[room_id] = None
+            set_room_status(room_id, RoomStatus.EMPTY)
+    else:
+        if waiting_global_channel:
+            waiting_global_channel = None
+
 @lobby_lock_guard
 def mark_stale_room(room_id: str):
     room_status[room_id] = RoomStatus.ENDED

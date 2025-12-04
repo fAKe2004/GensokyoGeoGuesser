@@ -97,6 +97,7 @@
 
         // Allow user to cancel: stop pings, close SSE, hide waiting UI
         const onCancel = () => {
+          post('/api/lobby/cancel_waiting', room ? { room } : {});
           if (timer) clearInterval(timer);
           clearInterval(pingTimer);
           try { evt.close(); } catch {}

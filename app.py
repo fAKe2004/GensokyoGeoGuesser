@@ -241,6 +241,13 @@ def lobby_ping():
     lb.mark_channel_seen(channel)
     return jsonify({"ok": True})
 
+@app.route("/api/lobby/cancel_waiting", methods=["POST"])
+def cancel_waiting():
+    payload = request.get_json(silent=True) or {}
+    room_id = payload.get("room")
+    lb.cancel_waiting(room_id)
+    return jsonify({"ok": True})
+
 @app.route("/api/next_round", methods=["POST"])
 def next_round():
     room_id = request.args.get("room")
