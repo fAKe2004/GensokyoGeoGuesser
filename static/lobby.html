@@ -121,6 +121,17 @@
             window.location.href = `/index.html?room=${encodeURIComponent(room)}&team=${encodeURIComponent(team)}`;
           }
         };
+
+        window.addEventListener('pagehide', () => {
+            // Check if we are in the waiting state
+            if (waiting.style.display === 'block') {
+                const room = (roomInput.value || '').trim();
+                const payload = room ? { room } : {};
+                const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+                // Use sendBeacon for reliable background request on page unload/hide
+                navigator.sendBeacon('/api/lobby/cancel_waiting', blob);
+            }
+        });
       }
     });
   </script>
