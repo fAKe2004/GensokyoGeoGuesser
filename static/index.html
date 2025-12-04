@@ -53,6 +53,7 @@
     .controls.inline button { flex:1; padding:10px 12px; border-radius:10px; border:2px solid #ddd; background:#fff; font-size:14px; font-weight:700; cursor:pointer; transition:.15s; }
     .controls.inline button:hover { background:#f0f0f0; border-color:#bbb; }
     .controls.inline button:disabled { opacity:.5; cursor:not-allowed; }
+    #refmap-btn-container { margin: 4px 0; } /* new style for the container */
 
     /* Reference Map overlay */
     #ref-overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.6); z-index:1000; }
@@ -80,6 +81,23 @@
     .winner-red { background: linear-gradient(90deg,#fff0f0,#fff4f4); color:#b02a2a; box-shadow:0 8px 24px rgba(238,87,85,0.14); }
     .winner-draw { background:#f3f4f6; color:#111; box-shadow:0 6px 18px rgba(0,0,0,0.06); }
     .result-sub { margin-top:10px; color:#555; font-size:15px; }
+
+    @media (max-width: 800px) {
+      #game-area {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+      }
+      #left-panel, #right-panel {
+        flex: 1;
+        width: 100%;
+        max-width: none; /* Override max-width for right panel */
+      }
+      #right-panel {
+        max-width: 500px; /* Set a max-width for very wide screens in this view */
+        align-self: center;
+      }
+    }
   </style>
 </head>
 <body>
@@ -98,9 +116,12 @@
             <div class="map-credit">We give acknowledgement to MC幻想郷 circle for kindly sharing their map.</div>
         </div>
     <div id="right-panel">
-    <h2 class="panel-title">Round <span id="round-current" class="badge-round">?</span> / <span id="round-max" class="badge-round secondary">?</span><span id="round-countdown" style="margin-left:auto; font-size:16px; font-weight:700; color:#111;">--:--</span></h2>
+    <h2 class="panel-title">Round <span id="round-current" class="badge-round">?</span> / <span id="round-max" class="badge-round secondary">?</span><span id="round-countdown" style="margin-left:auto; font-size:24px; font-weight:700; color:#111;">--:--</span></h2>
                 <div class="mult-box">Damage Multiplier <span id="dmg-mult" class="badge badge-accent">?x</span>
                     <span id="team-label" style="margin-left:auto; font-weight:700;"></span>
+                </div>
+                <div id="refmap-btn-container" class="controls inline">
+                    <button id="refmap-btn" title="Show annotated reference map">reference map</button>
                 </div>
         <div id="question-container">
             <img id="question-img" src="" alt="Question Image">
@@ -139,9 +160,6 @@
         <div class="controls inline">
             <button id="submit-btn" class="team-btn" disabled>submit</button>
         </div>
-                <div class="controls inline">
-                        <button id="refmap-btn" title="Show annotated reference map">reference map</button>
-                </div>
     </div>
   </div>
 

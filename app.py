@@ -389,11 +389,29 @@ def init_game():
         db.reset_round_status(room_id)
     return get_state()
 
+def parse_args() -> Tuple[int, bool]:
+    import argparse
+    parser = argparse.ArgumentParser(description="Geography Guessing Game Server")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode with verbose logging.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="Port to run the server on (default: 5000).",
+    )
+    args = parser.parse_args()
+    return args.port, args.debug
 
 if __name__ == "__main__":
+    port, DEBUG_MODE = parse_args()
+    
     import sys, os
     db.init_database()
-    # Enable DEBUG_MODE if '--debug' arg provided or ENV DEBUG=true
-    DEBUG_MODE = ("--debug" in sys.argv) or (str(os.environ.get("DEBUG", "")).lower() in {"1","true","yes"})
+
     print(f"DEBUG_MODE = {DEBUG_MODE}")
-    app.run(debug=False, port=5000)
+    print(f"Starting server on port {port}...")
+    app.run(debug=DEBUG_MODE, port=port)
