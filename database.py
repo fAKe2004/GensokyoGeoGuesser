@@ -10,7 +10,7 @@ from defs import *
 loc_sheet_path = "data/locations.csv" # format: loc, lat, lon (no header)
 que_sheet_path = "data/questions.csv" # format: global_id, image_filename, loc, category (no header)
 
-que_image_dir = "images/"
+que_image_dir = "dataset/" # relative to static/ folder
 
 # global, shared datasets (room-independent)
 # loc -> (lat, lon)
@@ -239,7 +239,8 @@ def get_phase_started_at(room_id: str) -> float:
 
 def init_database():    
     # load loc_db
-    with open(loc_sheet_path, "r", encoding="utf-8") as loc_file:
+    # use 'utf-8-sig' to gracefully handle files that may include a UTF-8 BOM
+    with open(loc_sheet_path, "r", encoding="utf-8-sig") as loc_file:
         for line in loc_file:
             line = line.strip()
             if not line:
@@ -249,7 +250,8 @@ def init_database():
             loc_db[loc] = (lat, lon)
     
     # load que_db (supports 4 or 5 columns: id, image_filename, loc, category[, comment])
-    with open(que_sheet_path, "r", encoding="utf-8") as que_file:
+    # use 'utf-8-sig' so a BOM on the first line doesn't end up in the id string
+    with open(que_sheet_path, "r", encoding="utf-8-sig") as que_file:
         for line in que_file:
             line = line.strip()
             if not line:

@@ -131,7 +131,12 @@ def get_state():
     # Always include the answer coordinate and location in the state
     answer_coord = db.loc_db.get(loc)
     if answer_coord is None:
-        raise RuntimeError(f"Location '{loc}' not found in loc_db.")
+        if DEBUG_MODE:
+            print(f"[WARN] Location '{loc}' not found in loc_db.")
+            answer_coord = (0.5, 0.5)
+        else:
+            raise RuntimeError(f"Location '{loc}' not found in loc_db.")
+        
     answer_loc = {
         "name": loc,
         "lat": (answer_coord[0] if answer_coord else None),
