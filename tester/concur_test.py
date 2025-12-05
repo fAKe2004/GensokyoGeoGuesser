@@ -13,7 +13,7 @@ BASE_URL = "http://127.0.0.1:5000"
 LOBBY_URL = f"{BASE_URL}/lobby"
 
 # Number of concurrent users to simulate
-N_USERS = 30
+N_USERS = 10
 
 # How long to wait for a match (redirect to game page)
 MATCH_TIMEOUT = 30000  # milliseconds

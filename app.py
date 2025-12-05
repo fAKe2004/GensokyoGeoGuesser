@@ -249,6 +249,20 @@ def cancel_waiting():
         lb.cancel_waiting(channel)
     return jsonify({"ok": True})
 
+@app.route("/api/exit", methods=["POST"])
+def exit_game():
+    room_id = request.args.get("room")
+    if not room_id:
+        return jsonify({"error": "Missing room id"}), 400
+    
+    # Mark room as ended
+    lb.mark_stale_room(room_id)
+    
+    # Notify other player
+    broadcast(room_id, "opponent_left")
+    
+    return jsonify({"ok": True})
+
 @app.route("/api/next_round", methods=["POST"])
 def next_round():
     room_id = request.args.get("room")

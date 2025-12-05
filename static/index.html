@@ -233,6 +233,7 @@
     let countdownTimer = null;
     let countdownEndAt = 0; // epoch ms when timer ends
     let countdownPhase = null; // 'guess' | 'agree'
+    let isGameEnded = false;
 
     function formatMMSS(totalSeconds) {
         const s = Math.max(0, Math.floor(totalSeconds));
@@ -479,6 +480,7 @@
                 resultTextEl.textContent = reason;
 
                 // Show modal
+                isGameEnded = true;
                 resultOverlay.style.display = 'flex';
                 resultOverlay.setAttribute('aria-hidden', 'false');
 
@@ -690,6 +692,12 @@
                 if (msg === 'next_round' || msg === 'reveal') {
                     // Soft refresh: fetch latest state and update UI without full page reload
                     fetchState();
+                } else if (msg === 'opponent_left') {
+                    isGameEnded = true;
+                    resultTitleEl.textContent = "Game Over";
+                    resultTextEl.innerHTML = `<div class="winner-badge winner-draw">DISCONNECTED</div><div class="result-sub">Your opponent has left the game.</div>`;
+                    resultOverlay.style.display = 'flex';
+                    resultOverlay.setAttribute('aria-hidden', 'false');
                 }
             };
             evt.onerror = function() {
@@ -707,6 +715,13 @@
                 window.location.href = '/lobby';
             });
         }
+
+        // Handle page unload/close
+        window.addEventListener('pagehide', () => {
+            if (!isGameEnded) {
+                navigator.sendBeacon(`/api/exit?room=${encodeURIComponent(roomId)}`);
+            }
+        });
     });
   </script>
 </body>
