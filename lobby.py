@@ -1,9 +1,8 @@
-import queue
 import threading
-from time import time
+import time
 import uuid
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 
 import database as db
 from defs import Team
@@ -17,22 +16,24 @@ class RoomStatus(Enum):
 # Tracks lobby room statuses
 room_status: dict[str, RoomStatus] = {}
 
-"""Lobby matchmaking primitives.
-- If a specific room_id is provided: first joiner waits (BLUE), second joiner matches (RED) and room enters IN_GAME.
-- If no room_id is provided: use a global quick-match queue; first waits (BLUE), second matches (RED) and a new room is created.
-"""
+# Queues
+# Quick match: list of channel_ids
+quick_match_queue: List[str] = []
+# Room match: room_id -> list of channel_ids
+room_queues: Dict[str, List[str]] = {}
 
-# Single waiting player channel for global quick match (no room chosen)
-waiting_global_channel: Optional[str] = None
+# Match results: channel_id -> {room_id, team}
+# Used to pass info back to the request that triggered the match
+match_results: Dict[str, dict] = {}
 
-# Per-room waiting channel ids (first joiner waiting)
-waiting_per_room_channel: dict[str, Optional[str]] = {}
-
-# Lobby SSE channels: arbitrary channel id -> list of queues
-lobby_event_channels: dict[str, list[queue.Queue]] = {}
+# Last seen timestamp for channels (for pruning)
 channel_last_seen: dict[str, float] = {}
 
 lobby_lock = threading.Lock()
+
+# Pruning state
+last_prune_time = 0.0
+PRUNE_INTERVAL = 5.0  # Run pruning at most every 5 seconds
 
 def lobby_lock_guard(func):
     def wrapper(*args, **kwargs):
@@ -46,55 +47,42 @@ def get_room_status(room_id: str) -> RoomStatus:
 def set_room_status(room_id: str, status: RoomStatus) -> None:
     room_status[room_id] = status
 
-def _broadcast_lobby(channel_id: str, msg: str) -> None:
-    for q in lobby_event_channels.get(channel_id, []):
-        try:
-            q.put(msg)
-        except Exception:
-            pass
-
-def create_lobby_event_stream(channel_id: str) -> queue.Queue:
-    q: queue.Queue[str] = queue.Queue()
-    lobby_event_channels.setdefault(channel_id, []).append(q)
-    # Mark channel seen at subscription time
-    try:
-        import time
-        channel_last_seen[channel_id] = time.time()
-    except Exception:
-        pass
-    return q
-
 def mark_channel_seen(channel_id: str) -> None:
-    try:
-        import time
-        channel_last_seen[channel_id] = time.time()
-    except Exception:
-        pass
+    channel_last_seen[channel_id] = time.time()
 
-def prune_stale_waiters(timeout_sec: float = 2) -> None:
-    # timeout at HTML side is 1 second
-    """Remove waiting channels if they haven't pinged recently."""
-    try:
-        import time
-        now = time.time()
-        # Global
-        global waiting_global_channel
-        if waiting_global_channel:
-            last = channel_last_seen.get(waiting_global_channel, 0)
-            if now - last > timeout_sec:
-                waiting_global_channel = None
-        # Per-room
-        to_clear: list[str] = []
-        for room_id, chan in waiting_per_room_channel.items():
-            if not chan:
-                continue
-            last = channel_last_seen.get(chan, 0)
-            if now - last > timeout_sec:
-                to_clear.append(room_id)
-        for room_id in to_clear:
-            waiting_per_room_channel[room_id] = None
-    except Exception:
-        pass
+def _prune_stale_waiters_internal(timeout_sec: float = 15) -> None:
+    now = time.time()
+    
+    # Quick match queue
+    global quick_match_queue
+    valid_q = []
+    for ch in quick_match_queue:
+        last = channel_last_seen.get(ch, now)
+        if now - last <= timeout_sec:
+            valid_q.append(ch)
+    quick_match_queue = valid_q
+    
+    # Room queues
+    for room_id, q in list(room_queues.items()):
+        valid_room_q = []
+        for ch in q:
+            last = channel_last_seen.get(ch, now)
+            if now - last <= timeout_sec:
+                valid_room_q.append(ch)
+        room_queues[room_id] = valid_room_q
+        if not valid_room_q:
+            del room_queues[room_id]
+
+    # Cleanup channel_last_seen for very old entries
+    cleanup_threshold = 120.0 # 2 minutes
+    to_remove = []
+    for ch, last in channel_last_seen.items():
+        if now - last > cleanup_threshold:
+            to_remove.append(ch)
+    
+    for ch in to_remove:
+        channel_last_seen.pop(ch, None)
+        match_results.pop(ch, None)
 
 def prune_stale_rooms() -> None:
     """Destroy rooms that have been marked ENDED."""
@@ -109,72 +97,99 @@ def prune_stale_rooms() -> None:
     except Exception:
         pass
 
+def _perform_matching():
+    # 1. Quick Match
+    while len(quick_match_queue) >= 2:
+        p1 = quick_match_queue.pop(0)
+        p2 = quick_match_queue.pop(0)
+        
+        new_room = f"room_{uuid.uuid4().hex}"
+        set_room_status(new_room, RoomStatus.IN_GAME)
+        if new_room not in db.rooms:
+            db.init_room(new_room)
+            db.reset_round_status(new_room)
+            
+        match_results[p1] = {"room": new_room, "team": Team.BLUE}
+        match_results[p2] = {"room": new_room, "team": Team.RED}
+
+    # 2. Room Match
+    for room_id, q in list(room_queues.items()):
+        if len(q) >= 2:
+            p1 = q.pop(0)
+            p2 = q.pop(0)
+            
+            set_room_status(room_id, RoomStatus.IN_GAME)
+            if room_id not in db.rooms:
+                db.init_room(room_id)
+                db.reset_round_status(room_id)
+            
+            match_results[p1] = {"room": room_id, "team": Team.BLUE}
+            match_results[p2] = {"room": room_id, "team": Team.RED}
+            
+            # Clean up empty queue
+            if not q:
+                del room_queues[room_id]
+
 @lobby_lock_guard
-def join_match(optional_room_id: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[Team], Optional[str]]:
+def join_match(optional_room_id: Optional[str]) -> Tuple[Optional[str], str, Optional[Team], Optional[str]]:
     """Unified join logic.
-    Returns (room_id, sse_channel, assigned_team, error_message).
-    - If error_message is not None, the join failed and should be reported.
-    - If room_id is None, caller should wait on SSE channel for 'matched:<room>:<team>'.
-    - If room_id is set, caller is immediately matched and can proceed.
+    Returns (room_id, channel_id, assigned_team, error_message).
     """
-    prune_stale_waiters()
-    prune_stale_rooms()
+    global last_prune_time
+    now = time.time()
+    if now - last_prune_time > PRUNE_INTERVAL:
+        _prune_stale_waiters_internal()
+        prune_stale_rooms()
+        last_prune_time = now
+    
+    my_channel_id = f"wait:{uuid.uuid4().hex}"
+    mark_channel_seen(my_channel_id)
     
     if optional_room_id:
         room_id = optional_room_id
         status = get_room_status(room_id)
         if status == RoomStatus.IN_GAME:
-            return None, None, None, "Room already in game. Please choose another room."
-        if status in (RoomStatus.EMPTY, RoomStatus.MATCHING):
-            # First joiner: set to MATCHING and wait as BLUE using a dedicated channel
-            set_room_status(room_id, RoomStatus.MATCHING)
-            channel = waiting_per_room_channel.get(room_id)
-            if channel:
-                # Second joiner matches now
-                set_room_status(room_id, RoomStatus.IN_GAME)
-                waiting_per_room_channel[room_id] = None
-                # Initialize room if needed
-                if room_id not in db.rooms:
-                    db.init_room(room_id)
-                    db.reset_round_status(room_id)
-                _broadcast_lobby(channel, f"matched:{room_id}:blue")
-                return room_id, None, Team.RED, None
-            else:
-                # Create a unique channel for the first joiner
-                channel_id = f"roomwait:{room_id}:{uuid.uuid4().hex}"
-                waiting_per_room_channel[room_id] = channel_id
-                return None, channel_id, Team.BLUE, None
+            return None, my_channel_id, None, "Room already in game. Please choose another room."
+        
+        if room_id not in room_queues:
+            room_queues[room_id] = []
+        room_queues[room_id].append(my_channel_id)
+        set_room_status(room_id, RoomStatus.MATCHING)
     else:
-        # Global quick match
-        global waiting_global_channel
-        if waiting_global_channel:
-            # Match with the waiting player: create a new room
-            new_room = f"room_{uuid.uuid4().hex}"
-            set_room_status(new_room, RoomStatus.IN_GAME)
-            if new_room not in db.rooms:
-                db.init_room(new_room)
-                db.reset_round_status(new_room)
-            _broadcast_lobby(waiting_global_channel, f"matched:{new_room}:blue")
-            waiting_global_channel = None
-            return new_room, None, Team.RED, None
-        else:
-            # No one waiting yet: current becomes first joiner (BLUE) and waits on a private channel
-            channel_id = f"globalwait:{uuid.uuid4().hex}"
-            waiting_global_channel = channel_id
-            return None, channel_id, Team.BLUE, None
+        quick_match_queue.append(my_channel_id)
+        
+    _perform_matching()
+    
+    # Check if I was matched immediately
+    if my_channel_id in match_results:
+        res = match_results.pop(my_channel_id)
+        return res["room"], my_channel_id, res["team"], None
+    else:
+        # Still waiting
+        return None, my_channel_id, Team.BLUE, None
 
 @lobby_lock_guard
-def cancel_waiting(optional_room_id: Optional[str]) -> None:
-    global waiting_global_channel
-    if optional_room_id:
-        room_id = optional_room_id
-        channel = waiting_per_room_channel.get(room_id)
-        if channel:
-            waiting_per_room_channel[room_id] = None
-            set_room_status(room_id, RoomStatus.EMPTY)
-    else:
-        if waiting_global_channel:
-            waiting_global_channel = None
+def check_match_status(channel_id: str) -> Tuple[Optional[str], Optional[Team]]:
+    mark_channel_seen(channel_id)
+    if channel_id in match_results:
+        res = match_results.pop(channel_id)
+        return res["room"], res["team"]
+    return None, None
+
+@lobby_lock_guard
+def cancel_waiting(channel_id: str) -> None:
+    if channel_id in quick_match_queue:
+        quick_match_queue.remove(channel_id)
+    
+    for room_id, q in list(room_queues.items()):
+        if channel_id in q:
+            q.remove(channel_id)
+            if not q:
+                del room_queues[room_id]
+                set_room_status(room_id, RoomStatus.EMPTY)
+    
+    channel_last_seen.pop(channel_id, None)
+    match_results.pop(channel_id, None)
 
 @lobby_lock_guard
 def mark_stale_room(room_id: str):

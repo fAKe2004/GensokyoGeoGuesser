@@ -209,15 +209,6 @@ def lobby():
     # Serve the simple lobby page for choosing a room and team
     return send_from_directory(app.static_folder, "lobby.html")
 
-@app.route("/lobby/events/<room_id>")
-def lobby_events(room_id: str):
-    q = lb.create_lobby_event_stream(room_id)
-    def stream():
-        while True:
-            msg = q.get()
-            yield f"data: {msg}\n\n"
-    return Response(stream(), mimetype="text/event-stream")
-
 @app.route("/api/lobby/quick_match", methods=["POST"])
 def lobby_quick_match():
     """Unified quick match / room join endpoint.
@@ -237,20 +228,25 @@ def lobby_quick_match():
     else:
         return jsonify({"matched": False, "team": team.value.lower(), "channel": sse_channel})
 
-@app.route("/api/lobby/ping", methods=["POST"])
-def lobby_ping():
+@app.route("/api/lobby/poll", methods=["POST"])
+def lobby_poll():
     payload = request.get_json(silent=True) or {}
     channel = payload.get("channel")
     if not channel:
         return jsonify({"error": "Missing channel"}), 400
-    lb.mark_channel_seen(channel)
-    return jsonify({"ok": True})
+    
+    room_id, team = lb.check_match_status(channel)
+    if room_id:
+        return jsonify({"matched": True, "room": room_id, "team": team.value.lower()})
+    else:
+        return jsonify({"matched": False})
 
 @app.route("/api/lobby/cancel_waiting", methods=["POST"])
 def cancel_waiting():
     payload = request.get_json(silent=True) or {}
-    room_id = payload.get("room")
-    lb.cancel_waiting(room_id)
+    channel = payload.get("channel")
+    if channel:
+        lb.cancel_waiting(channel)
     return jsonify({"ok": True})
 
 @app.route("/api/next_round", methods=["POST"])
