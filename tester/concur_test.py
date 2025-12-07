@@ -16,9 +16,9 @@ LOBBY_URL = f"{BASE_URL}/lobby"
 N_USERS = 10
 
 # How long to wait for a match (redirect to game page)
-MATCH_TIMEOUT = 30000  # milliseconds
+MATCH_TIMEOUT = 300000  # milliseconds
 
-STAGGER_TIME = 1.0  # seconds, uniformly sample and shift the starting time
+STAGGER_TIME = 0.0  # seconds, uniformly sample and shift the starting time
 
 
 async def simulate_user(browser, user_id):

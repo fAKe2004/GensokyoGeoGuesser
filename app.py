@@ -1,5 +1,4 @@
 from flask import Flask, jsonify, request, send_from_directory, redirect, Response
-import os
 import queue
 import time
 
@@ -7,6 +6,8 @@ import database as db
 import calc
 from defs import *
 import lobby as lb
+
+db.init_database()
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -431,9 +432,6 @@ def parse_args() -> Tuple[int, bool]:
 if __name__ == "__main__":
     port, DEBUG_MODE = parse_args()
     
-    import sys, os
-    db.init_database()
-
     print(f"DEBUG_MODE = {DEBUG_MODE}")
     print(f"Starting server on port {port}...")
     app.run(debug=DEBUG_MODE, port=port)
