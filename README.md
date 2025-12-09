@@ -7,6 +7,8 @@ This repository contains the Gensokyo Geo Guessor game for SJTU Touhou Festive 2
 
 **Description**: Gensokyo Geo-Guesser is a 2-team competitive game where players guess the location of various scenes from Gensokyo on a map. The goal is to be more accurate than the opposing team and deplete their HP to zero.
 
+
+
 ---
 ## Credits
 
@@ -23,7 +25,7 @@ This repository contains the Gensokyo Geo Guessor game for SJTU Touhou Festive 2
 
 > You don't need our prior permission to use it, though we'd love to hear about your usage.
 
-> You may use our deployment (i.e., [ggg.arthas.org](ggg.arthas.org)) directly if you are not expert in computer science. In that case, we recommand contacting [project owner](mailto:fake@sjtu.edu.cn) beforehand to get potential maintanance support during your Touhou event.
+> You may use our deployment (i.e., [ggg.arthas.org](ggg.arthas.org)) directly if you are not expert in computer science. In that case, we recommend contacting [project owner](mailto:fake@sjtu.edu.cn) beforehand to get potential maintanance support during your Touhou event.
 
 
 
@@ -69,7 +71,7 @@ A **Draw** if both teams have the same amount of HP when game ends by either fin
 
 ## How to Deploy
 
-> You may use our deployment (i.e., [ggg.arthas.org](ggg.arthas.org)) directly if you are not expert in computer science. In that case, we recommand contacting [project maintainer](mailto:fake@sjtu.edu.cn) beforehand to get potential maintanance support during your Touhou event.
+> You may use our deployment (i.e., [ggg.arthas.org](ggg.arthas.org)) directly if you are not expert in computer science. In that case, we recommend contacting [project maintainer](mailto:fake@sjtu.edu.cn) beforehand to get potential maintanance support during your Touhou event.
 
 This web application is built with a Python Flask backend and a plain HTML/CSS/JavaScript frontend.
 
@@ -124,7 +126,7 @@ python app.py --debug
 
 Deploying this game is the same as any other web apps. You may ask AI for 'how to create a service to maintain flask app alive', and 'how to set up reverse proxy to forward traffic to local apps'.
 
-~~For a production level deployment, please follow the official guide of Flask and WSGI server.~~ *The current implment with async and multithreading is not compatible with WSGI. Use Flask direcly please.*
+~~For a production level deployment, please follow the official guide of Flask and WSGI server.~~ *The current implment with async and multithreading is not compatible with WSGI. Use Flask instead.*
 
 
 ---
